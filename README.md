@@ -1,32 +1,94 @@
-# RTL8720dn-Deauther
-![GitHub Issues or Pull Requests](https://img.shields.io/github/issues/tesa-klebeband/RTL8720dn-Deauther)
-![GitHub License](https://img.shields.io/github/license/tesa-klebeband/RTL8720dn-Deauther)
-![GitHub Repo stars](https://img.shields.io/github/stars/tesa-klebeband/RTL8720dn-Deauther?style=flat)
-![GitHub forks](https://img.shields.io/github/forks/tesa-klebeband/RTL8720dn-Deauther?style=flat)
-![logo](https://github.com/user-attachments/assets/ab8ebf84-eee2-4298-8975-2e8dad13c1b3)
+## 简介
 
-My ESP32-Deauther ported to the RTL8720dn, allowing users to deauthenticate on 5Ghz now!
-# DISCLAIMER
-This tool has been made for educational and testing purposes only. Any misuse or illegal activities conducted with the tool are strictly prohibited. I am **not** responsible for any consequences arising from the use of the tool, which is done at your own risk.
-## Building
-Building is done using the ArduinoIDE. Make sure you have added the board manager URL for Realtek MCUs and installed them in the board manager.
-1) Clone this repo using `git clone https://github.com/tesa-klebeband/RTL8720dn-Deauther.git`
-2) Open the cloned folder in the Arduino IDE
-3) Connect your board and hit upload
-### Notes
-Most RTL8720dn devboards have the upload and log serial ports isolated. Make sure to bridge **LOG_UART_TX** and **LP_UART_TX**, as well as **LOG_UART_RX** and **LP_UART_RX** during uploading.
-## Using RTL8720dn-Deauther
-The RTL8720dn hosts a WiFi network with the name of `RTL8720dn-Deauther` and a password of `0123456789`. Connect to this network and type the IP of your RTL8720dn (typically **192.168.1.1**) into a webbrowser of a choice.
-### Rescan networks
-Rescan and detect all WiFi networks in your area. After a successful scan, the networks are listed in the above table.
-### Launch Deauth-Attack
-Deauthenticates all clients connected to one or multiple networks. Select the networks you want to deauth in the table above and click **Start Attack!**.
-### Stopping a Deauth-Attack
-To stop an ongoing attack, hit the **Stop** button.
-### Leds
-The RTL8720dn-Deauther utilizes the RGB led that most devboards have. This is what the different colors indicate:
-* Red: The system state. Lights up when the system is usable.
-* Green: Lights up when a HTTP communication between a device and the Deauther is happening.
-* Blue: Flashes when a deauth frame is being sent.
-## License
-All files within this repo are released under the GNU GPL V3 License as per the LICENSE file stored in the root of this repo.
+本教程使用RTL8720DN模块制作WiFi杀手，能够对2.4GHz和5GHz的Wi-Fi进行Deauth攻击，强行切断用户与Wi-Fi网络的连接。  
+经实验，能够令方圆5米左右的设备掉线/严重丢包，但是对WPA3无效。
+
+最低配置只需要一个RTL8720DN模块，成本约30元，无需短接，顺便买一个天线，能搜索的范围更大，我会尽量写的容易理解。
+
+> [!CAUTION]
+> 本教程仅供学习参考，请勿用于非法用途，否则可能构成犯罪。  
+> 使用者需自行承担全部操作风险及法律后果。
+
+## 前期准备
+
+### 环境搭建
+
+- 从[Arduino](https://www.arduino.cc/en/software/#ide)官网下载Arduino IDE并安装。
+- 点击左上角File，选择Preferences，在弹出的窗口中，你可以改一下语言。  
+接下来的步骤都默认你的软件已经切换到了中文。
+- 还是刚刚的首选项页面，找到`其他开发板管理地址`，并添加下面的链接，点击确定，会经过一小会的下载。
+
+```
+https://github.com/ambiot/ambd_arduino/raw/master/Arduino_package/package_realtek.com_amebad_index.json
+```
+
+- 在`工具>开发板>开发板管理器`中搜索`rtl`，安装`32-bits ARM Cortex-M33 @200MHz`这个，版本选择最新的3.1.7即可。
+
+### 连接模块
+
+- 下载驱动程序并安装：[CH341SER.EXE](https://data.vanadiry.com/app/CH341SER.EXE)，备用。
+- 把你的板子连接到电脑，打开设备管理器查看串口设备，应该会看到`COM+数字`的设备，这就是你的板子。
+- 在Arduino IDE中，点击`工具>开发板`，选择 `Ai-Thinker BW16(RTL8720DN)`。
+- 在Arduino IDE左上部分，点击你板子的名字，选择对应的串口。
+- 右下角显示`设备名在COM xx上`即表示连接成功。
+
+### 修改程序
+
+- 下载[RTL8720dn-Deauther.zip](RTL8720dn-Deauther.zip)，解压后用Arduino IDE打开。当然你也可以用英文原版。  
+- 这个模块会建立一个WiFi供你连接到后台，在文件的25和26行，你可以自定你的WiFi名字和密码。
+
+```ino
+char *ssid = "RTL8720dn-Deauther"; // wifi名称
+char *pass = "0123456789"; // wifi密码
+```
+
+### 上传程序
+
+你的板子应该还在电脑上连着，现在拿着它。
+
+按住`BURN`按钮不松手，然后点一下`RST`按钮，接着松开`BURN`按钮，板子会进入下载模式。  
+USB-C接口向下，一般来说`BURN`按钮是右边那个。
+
+![BW16-kit](imgs/BW16-kit.png)
+
+点击Arduino IDE左上角的上传按钮（向右箭头），等待编译和上传完成即可。
+
+![上传](imgs/upload.png)
+
+这样表示上传成功
+
+## 使用
+
+点击`RST`按钮或者断开板子重新上电，重置一下板子，然后用你的其他设备，连接板子的WiFi。
+在浏览器地址栏输入`192.168.1.1`进入后台。
+
+![展示](imgs/test.png)
+
+BSSID码掉了。
+
+你会看到很多WiFi的名字，选择你想要攻击的那个（也可以多选）。  
+下划，直接点击`攻击!`，这里默认帧数是5，延迟也是5，也可以自定义帧数和延迟，找到`每次发送的帧数`，这里决定你一次批量发多少“deauth”帧。（你可以根据后台里的对照表选择其他的，数值越大，一次性干扰越猛烈，但也更容易被AP检测出来）。  
+`发送延迟(ms)`表示攻击间隔（太频繁也容易被检测）。
+
+![设置](imgs/setup.png)
+
+此时，你板子的LED应该会蓝灯闪烁，代表已经开始攻击。  
+如果你用Edge浏览器，可能会跳转到`192.168.1.1/attack`的空页面，刷新页面重新提交即可。
+
+> [!tip]
+> 开始攻击后，RTL8720DN的wifi也会无法连接。
+
+## 疑问
+
+Deauth攻击是发送伪造的解除认证帧到客户端，让客户端认为接入点要求断开连接。
+简单来说，**主要是攻击客户端，而不是接入点**。
+
+部分家用路由器，日志记录不详细，一般来说查不到。
+企业级设备有更完备的日志记录和入侵检测功能，可能会检测到客户端频繁的解除认证，从而判定异常。
+
+最后提醒，**未经授权的Deauth攻击是违法行为**。
+
+## 备注
+
+本教程转自[都学得会的 BW16 (RTL8720DN) WiFi 杀手制作](https://magic.vanadiry.com/blog/tech/013/)  
+作者：Vanadiry
