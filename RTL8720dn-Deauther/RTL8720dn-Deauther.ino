@@ -412,8 +412,76 @@ String makeResponse(int code, String content_type) {
 String makeRedirect(String url) {
   String response = "HTTP/1.1 303 See Other\r\n";
   response += "Location: " + url + "\r\n";
+  response += "Content-Length: 0\r\n";
   response += "Connection: close\r\n\r\n";
   return response;
+}
+
+String jsonEscape(const String &str) {
+  String out = "";
+  int len = str.length();
+  for (int i = 0; i < len; i++) {
+    unsigned char c = (unsigned char)str[i];
+    if (c == '\\') out += "\\\\";
+    else if (c == '"') out += "\\\"";
+    else if (c == '\n') out += "\\n";
+    else if (c == '\r') out += "\\r";
+    else if (c == '\t') out += "\\t";
+    else if (c >= 0x20) out += (char)c;
+  }
+  return out;
+}
+
+bool isAjaxRequest(const String &request) {
+  int header_end = request.indexOf("\r\n\r\n");
+  String headers = (header_end != -1) ? request.substring(0, header_end) : request;
+  headers.toLowerCase();
+  return headers.indexOf("x-requested-with: fetch") != -1;
+}
+
+void sendJson(WiFiClient &client, const String &body) {
+  String response = "HTTP/1.1 200 OK\r\n";
+  response += "Content-Type: application/json; charset=utf-8\r\n";
+  response += "Content-Length: " + String(body.length()) + "\r\n";
+  response += "Cache-Control: no-store\r\n";
+  response += "Connection: close\r\n\r\n";
+  response += body;
+  client.write(response.c_str());
+}
+
+String buildStatusJson() {
+  String json = "{";
+  json += "\"ok\":true,";
+  json += "\"running\":" + String(isDeauthing ? "true" : "false") + ",";
+  json += "\"led\":" + String(led ? "true" : "false") + ",";
+  json += "\"sent_frames\":" + String(sent_frames) + ",";
+  json += "\"send_delay\":" + String(send_delay) + ",";
+  json += "\"frames_per_deauth\":" + String(frames_per_deauth) + ",";
+  json += "\"ap_count\":" + String(scan_results.size());
+  json += "}";
+  return json;
+}
+
+String buildScanJson() {
+  String json = "{";
+  json += "\"ok\":true,";
+  json += "\"running\":" + String(isDeauthing ? "true" : "false") + ",";
+  json += "\"led\":" + String(led ? "true" : "false") + ",";
+  json += "\"sent_frames\":" + String(sent_frames) + ",";
+  json += "\"send_delay\":" + String(send_delay) + ",";
+  json += "\"frames_per_deauth\":" + String(frames_per_deauth) + ",";
+  json += "\"ap_count\":" + String(scan_results.size()) + ",";
+  json += "\"networks\":[";
+  for (uint32_t i = 0; i < scan_results.size(); i++) {
+    if (i > 0) json += ",";
+    json += "{\"idx\":" + String(i) + ",";
+    json += "\"ssid\":\"" + jsonEscape(scan_results[i].ssid) + "\",";
+    json += "\"channel\":" + String(scan_results[i].channel) + ",";
+    json += "\"bssid\":\"" + jsonEscape(scan_results[i].bssid_str) + "\",";
+    json += "\"rssi\":" + String(scan_results[i].rssi) + "}";
+  }
+  json += "]}";
+  return json;
 }
 
 void handleRoot(WiFiClient &client) {
@@ -705,30 +773,56 @@ void handleRoot(WiFiClient &client) {
       .longInput{
         width: 138px;
       }
+
+      #toast {
+        position: fixed;
+        bottom: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: #202225;
+        color: #fff;
+        border-left: 4px solid #20c20e;
+        padding: 10px 18px;
+        border-radius: 4px;
+        font-size: 13px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.45);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.2s ease;
+        z-index: 999;
+      }
+      #toast.show {
+        opacity: 1;
+      }
+      #toast.err {
+        border-left-color: #f04747;
+      }
     </style>
   </head>
   <body>
+  <div id="toast"></div>
   <div class="container">
     <h1 class="bold">RTL8720dn-Deauther</h1>
       <div class="center">
         <div class="button-container">
-          <form method="post" action="/rescan">
+          <form method="post" action="/rescan" data-ajax="rescan">
               <input type="submit" value="刷新网络">
           </form>
-          <form method="post" action="/refresh">
-              <input type="submit" value="刷新页面">
+          <form method="post" action="/refresh" data-ajax="status">
+              <input type="submit" value="刷新状态">
           </form>
           <form method="get" action="/wifi">
               <input type="submit" value="WiFi / IP 设置" style="border: 1px solid #20c20e; padding: 0 12px;">
           </form>
         </div>
       </div>
-      <form method="post" action="/deauth">
-      <h2>接入点: )" + String(scan_results.size()) + R"(</h2>
+      <form id="deauthForm" method="post" action="/deauth" data-ajax="deauth">
+      <h2>接入点: <span id="apCount">)" + String(scan_results.size()) + R"(</span></h2>
       <div class="centered">
         <h3 class="bold">5 GHz 网络</h3>  
       </div>
         <table>
+          <thead>
           <tr>
             <th>SSID</th>
             <th class='tdFixed'>CH</th>
@@ -737,6 +831,8 @@ void handleRoot(WiFiClient &client) {
             <th class='tdFixed'></th>
             <th class='selectColumn'></th>
           </tr>
+          </thead>
+          <tbody id="tb5g">
   )";
 
   for (uint32_t i = 0; i < scan_results.size(); i++) {
@@ -750,7 +846,7 @@ void handleRoot(WiFiClient &client) {
       else color = "meter_green";
 
       response += "<tr>";
-      response += "<td>" + String((scan_results[i].ssid.length() > 0) ? scan_results[i].ssid : "**HIDDEN**") + "</td>";
+      response += "<td>" + String((scan_results[i].ssid.length() > 0) ? htmlEscape(scan_results[i].ssid) : "**HIDDEN**") + "</td>";
       response += "<td class='tdFixed'>" + String(scan_results[i].channel) + "</td>";
       response += "<td>" + scan_results[i].bssid_str + "</td>";
       response += "<td class='tdMeter'><div class='meter_background'> <div class='meter_forground " + String(color) + "' style='width: " + String(width) + "%'><div class='meter_value'>" + String(scan_results[i].rssi) + "</div></div></div></td>";
@@ -759,11 +855,13 @@ void handleRoot(WiFiClient &client) {
     }
   }
   response += R"(
+          </tbody>
         </table>
         <div class="centered">
           <h3 class="bold">2.4 GHz 网络</h3>  
         </div>
           <table>
+            <thead>
             <tr>
               <th>SSID</th>
               <th class='tdFixed'>CH</th>
@@ -772,6 +870,8 @@ void handleRoot(WiFiClient &client) {
               <th class='tdFixed'></th>
               <th class='selectColumn'></th>
             </tr>
+            </thead>
+            <tbody id="tb24g">
   )";
 
   for (uint32_t i = 0; i < scan_results.size(); i++) {
@@ -785,7 +885,7 @@ void handleRoot(WiFiClient &client) {
       else color = "meter_green";
       
       response += "<tr>";
-      response += "<td>" + String((scan_results[i].ssid.length() > 0) ? scan_results[i].ssid : "**HIDDEN**") + "</td>";
+      response += "<td>" + String((scan_results[i].ssid.length() > 0) ? htmlEscape(scan_results[i].ssid) : "**HIDDEN**") + "</td>";
       response += "<td class='tdFixed'>" + String(scan_results[i].channel) + "</td>";
       response += "<td>" + scan_results[i].bssid_str + "</td>";
       response += "<td class='tdMeter'><div class='meter_background'> <div class='meter_forground " + String(color) + "' style='width: " + String(width) + "%'><div class='meter_value'>" + String(scan_results[i].rssi) + "</div></div></div></td>";
@@ -794,6 +894,7 @@ void handleRoot(WiFiClient &client) {
     }
   }
   response += R"(
+            </tbody>
         </table>
             <div class="center">
               <div class="button-container">
@@ -802,7 +903,7 @@ void handleRoot(WiFiClient &client) {
             </div>
       </form>
       <div class="center">
-        <form method="post" action="/stop">
+        <form method="post" action="/stop" data-ajax="stop">
           <div class="button-container">
             <input type="submit" value="停止">
           </div>
@@ -816,23 +917,23 @@ void handleRoot(WiFiClient &client) {
   response += "<tr><td>后台管理 IP</td><td>" + getCurrentIPString() + "</td></tr>";
   response += "<tr><td>子网掩码</td><td>" + formatIPv4(net_cfg.mask) + "</td></tr>";
   response += "<tr><td>DHCP 服务</td><td>" + String(net_cfg.dhcp_enabled ? "开启" : "关闭") + "</td></tr>";
-  response += "<tr><td>攻击状态</td><td>" + String(isDeauthing ? "运行" : "停止") + "</td></tr>";
-  response += "<tr><td>LED启用</td><td>" + String(led ? "是" : "否") + "</td></tr>";
-  response += "<tr><td>发送帧数</td><td>" + String(sent_frames) + "</td></tr>";
-  response += "<tr><td>发送延迟</td><td>" + String(send_delay) + "</td></tr>";
-  response += "<tr><td>每次发送的帧数</td><td>" + String(frames_per_deauth) + "</td></tr>";
+  response += "<tr><td>攻击状态</td><td id='st_run'>" + String(isDeauthing ? "运行" : "停止") + "</td></tr>";
+  response += "<tr><td>LED启用</td><td id='st_led'>" + String(led ? "是" : "否") + "</td></tr>";
+  response += "<tr><td>发送帧数</td><td id='st_sent'>" + String(sent_frames) + "</td></tr>";
+  response += "<tr><td>发送延迟</td><td id='st_delay'>" + String(send_delay) + "</td></tr>";
+  response += "<tr><td>每次发送的帧数</td><td id='st_frames'>" + String(frames_per_deauth) + "</td></tr>";
   response += "</table>";
   response += "<h2>设置</h2>";
   response += "<div class=\"center\">";
   response += "<div class=\"button-double\">";
-  response += "<form method=\"post\" action=\"/setframes\">";
+  response += "<form method=\"post\" action=\"/setframes\" data-ajax=\"setframes\">";
   response += "<div class=\"button-container\">";
   response += "<input class=\"longInput\" type=\"text\" name=\"frames\" placeholder=\"每次发送的帧数\">";
   response += "<input type=\"submit\" value=\"设置帧数\">";
   response += "</div>";
   response += "</form>";
 
-  response += "<form method=\"post\" action=\"/setdelay\">";
+  response += "<form method=\"post\" action=\"/setdelay\" data-ajax=\"setdelay\">";
   response += "<div class=\"button-container\">";
   response += "<input class=\"longInput\" type=\"text\" name=\"delay\" placeholder=\"发送延迟(ms)\">";
   response += "<input type=\"submit\" value=\"设置延迟\">";
@@ -844,16 +945,146 @@ void handleRoot(WiFiClient &client) {
   response += "<h2>LED选项</h2>";
   response += "<div class=\"center\">";
   response += "<div class=\"button-container\">";
-  response += "<form method=\"post\" action=\"/led_enable\">";
+  response += "<form method=\"post\" action=\"/led_enable\" data-ajax=\"led_on\">";
   response += "<input class=\"green\" type=\"submit\" value=\"开\">";
   response += "</form>";
 
-  response += "<form method=\"post\" action=\"/led_disable\">";
+  response += "<form method=\"post\" action=\"/led_disable\" data-ajax=\"led_off\">";
   response += "<input class=\"red\" type=\"submit\" value=\"关\">";
   response += "</form>";
   response += "</div>";
   response += "</div>";
   response += "</div>";
+  response += R"RAW(
+  <script>
+  (function() {
+    var toastTimer = null;
+    function showToast(msg, isErr) {
+      var t = document.getElementById('toast');
+      t.textContent = msg;
+      t.className = isErr ? 'show err' : 'show';
+      if (toastTimer) clearTimeout(toastTimer);
+      toastTimer = setTimeout(function() { t.className = ''; }, 2200);
+    }
+
+    function escHtml(s) {
+      return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    function updateStatus(d) {
+      if (!d) return;
+      if (typeof d.running === 'boolean') document.getElementById('st_run').textContent = d.running ? '运行' : '停止';
+      if (typeof d.led === 'boolean') document.getElementById('st_led').textContent = d.led ? '是' : '否';
+      if (typeof d.sent_frames === 'number') document.getElementById('st_sent').textContent = d.sent_frames;
+      if (typeof d.send_delay === 'number') document.getElementById('st_delay').textContent = d.send_delay;
+      if (typeof d.frames_per_deauth === 'number') document.getElementById('st_frames').textContent = d.frames_per_deauth;
+      if (typeof d.ap_count === 'number') document.getElementById('apCount').textContent = d.ap_count;
+    }
+
+    function buildRow(ap) {
+      var width = ap.rssi + 120;
+      var colorWidth = ap.rssi + 130;
+      var color = colorWidth < 50 ? 'meter_red' : (colorWidth < 70 ? 'meter_orange' : 'meter_green');
+      var ssid = (ap.ssid && ap.ssid.length > 0) ? escHtml(ap.ssid) : '**HIDDEN**';
+      return '<tr>' +
+        '<td>' + ssid + '</td>' +
+        '<td class="tdFixed">' + ap.channel + '</td>' +
+        '<td>' + escHtml(ap.bssid) + '</td>' +
+        '<td class="tdMeter"><div class="meter_background"><div class="meter_forground ' + color + '" style="width:' + width + '%"><div class="meter_value">' + ap.rssi + '</div></div></div></td>' +
+        '<td><label class="checkBoxContainer"><input type="checkbox" name="network" value="' + ap.idx + '"><span class="checkmark"></span></label></td>' +
+        '</tr>';
+    }
+
+    function renderNetworks(list) {
+      var html5 = '', html24 = '';
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].channel >= 36) html5 += buildRow(list[i]);
+        else if (list[i].channel <= 14) html24 += buildRow(list[i]);
+      }
+      document.getElementById('tb5g').innerHTML = html5;
+      document.getElementById('tb24g').innerHTML = html24;
+    }
+
+    function serializeForm(form) {
+      var pairs = [];
+      var els = form.elements;
+      for (var i = 0; i < els.length; i++) {
+        var el = els[i];
+        if (!el.name || el.disabled) continue;
+        if ((el.type === 'checkbox' || el.type === 'radio') && !el.checked) continue;
+        if (el.type === 'submit' || el.type === 'button') continue;
+        pairs.push(encodeURIComponent(el.name) + '=' + encodeURIComponent(el.value));
+      }
+      return pairs.join('&');
+    }
+
+    var forms = document.querySelectorAll('form[data-ajax]');
+    for (var i = 0; i < forms.length; i++) {
+      forms[i].addEventListener('submit', function(e) {
+        e.preventDefault();
+        var form = this;
+        var kind = form.getAttribute('data-ajax');
+        var btn = form.querySelector('input[type="submit"], button[type="submit"]');
+        var body = serializeForm(form);
+
+        if (kind === 'deauth' && body.indexOf('network=') === -1) {
+          showToast('请先勾选至少一个目标网络', true);
+          return;
+        }
+
+        var origText = btn ? btn.value : '';
+        if (btn) {
+          btn.disabled = true;
+          if (kind === 'rescan') btn.value = '扫描中(5s)...';
+        }
+
+        fetch(form.getAttribute('action'), {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'X-Requested-With': 'fetch'
+          },
+          body: body
+        })
+        .then(function(res) {
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          return res.json();
+        })
+        .then(function(data) {
+          updateStatus(data);
+          if (kind === 'rescan' && Array.isArray(data.networks)) {
+            renderNetworks(data.networks);
+            showToast('扫描完成，共发现 ' + data.ap_count + ' 个网络', false);
+          } else if (kind === 'status') {
+            showToast('状态已更新', false);
+          } else if (kind === 'deauth') {
+            showToast(data.running ? '已开始运行' : '未选择有效目标', !data.running);
+          } else if (kind === 'stop') {
+            showToast('已停止', false);
+          } else if (kind === 'setframes') {
+            showToast('每次发送帧数已设为 ' + data.frames_per_deauth, false);
+          } else if (kind === 'setdelay') {
+            showToast('发送延迟已设为 ' + data.send_delay + ' ms', false);
+          } else if (kind === 'led_on') {
+            showToast('LED 已开启', false);
+          } else if (kind === 'led_off') {
+            showToast('LED 已关闭', false);
+          }
+        })
+        .catch(function() {
+          showToast('请求失败，请检查设备连接状态', true);
+        })
+        .finally(function() {
+          if (btn) {
+            btn.disabled = false;
+            if (kind === 'rescan') btn.value = origText;
+          }
+        });
+      });
+    }
+  })();
+  </script>
+  )RAW";
   response += "</body>";
   response += "</html>";
 
@@ -1431,8 +1662,12 @@ void loop() {
       handleWiFiSavedAndReboot(client, "已恢复默认网络设置");
       return;
     } else if (path == "/rescan") {
-      client.write(makeRedirect("/").c_str());
       scanNetworks();
+      if (isAjaxRequest(request)) {
+        sendJson(client, buildScanJson());
+      } else {
+        client.write(makeRedirect("/").c_str());
+      }
     } else if (path == "/deauth") {
       std::vector<std::pair<String, String>> post_data = parsePost(request);
       deauth_channels.clear();
@@ -1449,10 +1684,12 @@ void loop() {
           deauth_reason = String(param.second).toInt();
         }
       }
-      if (!deauth_channels.empty()) {
-        isDeauthing = true;
+      isDeauthing = !deauth_channels.empty();
+      if (isAjaxRequest(request)) {
+        sendJson(client, buildStatusJson());
+      } else {
+        client.write(makeRedirect("/").c_str());
       }
-      client.write(makeRedirect("/").c_str());
     } else if (path == "/setframes") {
       std::vector<std::pair<String, String>> post_data = parsePost(request);
       for (auto &param : post_data) {
@@ -1461,7 +1698,11 @@ void loop() {
           frames_per_deauth = frames <= 0 ? 5 : frames;
         }
       }
-      client.write(makeRedirect("/").c_str());
+      if (isAjaxRequest(request)) {
+        sendJson(client, buildStatusJson());
+      } else {
+        client.write(makeRedirect("/").c_str());
+      }
     } else if (path == "/setdelay") {
       std::vector<std::pair<String, String>> post_data = parsePost(request);
       for (auto &param : post_data) {
@@ -1470,28 +1711,49 @@ void loop() {
           send_delay = delay <= 0 ? 5 : delay;
         }
       }
-      client.write(makeRedirect("/").c_str());
+      if (isAjaxRequest(request)) {
+        sendJson(client, buildStatusJson());
+      } else {
+        client.write(makeRedirect("/").c_str());
+      }
     } else if (path == "/stop") {
       deauth_channels.clear();
       chs_idx.clear();
       isDeauthing = false;
-      client.write(makeRedirect("/").c_str());
+      if (isAjaxRequest(request)) {
+        sendJson(client, buildStatusJson());
+      } else {
+        client.write(makeRedirect("/").c_str());
+      }
     } else if (path == "/led_enable") {
       led = true;
       digitalWrite(LED_R, HIGH);
-      client.write(makeRedirect("/").c_str());
+      if (isAjaxRequest(request)) {
+        sendJson(client, buildStatusJson());
+      } else {
+        client.write(makeRedirect("/").c_str());
+      }
     } else if (path == "/led_disable") {
       led = false;
       digitalWrite(LED_R, LOW);
       digitalWrite(LED_G, LOW);
       digitalWrite(LED_B, LOW);
-      client.write(makeRedirect("/").c_str());
-    } else if (path == "/refresh") {
-      client.write(makeRedirect("/").c_str());
+      if (isAjaxRequest(request)) {
+        sendJson(client, buildStatusJson());
+      } else {
+        client.write(makeRedirect("/").c_str());
+      }
+    } else if (path == "/refresh" || path == "/status") {
+      if (isAjaxRequest(request) || path == "/status") {
+        sendJson(client, buildStatusJson());
+      } else {
+        client.write(makeRedirect("/").c_str());
+      }
     } else {
       handle404(client);
     }
 
+    delay(10);
     client.stop();
     if (led) {
       digitalWrite(LED_G, LOW);
