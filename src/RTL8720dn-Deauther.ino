@@ -495,6 +495,7 @@ void handleRoot(WiFiClient &client) {
     <title>RTL8720dn-Deauther</title>
     <style>
       * { box-sizing: border-box; }
+      form { margin: 0; }
       body {
         background: #36393e;
         color: #dcddde;
@@ -899,20 +900,8 @@ void handleRoot(WiFiClient &client) {
   }
   response += R"(
             </tbody>
-        </table>
-            <div class="center">
-              <div class="button-container">
-                <input type="submit" value="攻击!">  
-              </div>
-            </div>
+          </table>
       </form>
-      <div class="center">
-        <form method="post" action="/stop" data-ajax="stop">
-          <div class="button-container">
-            <input type="submit" value="停止">
-          </div>
-        </form>
-      </div>
       <h2>面板</h2>
     <table>
       <tr><th>状态</th><th>当前状态</th></tr>
@@ -942,6 +931,16 @@ void handleRoot(WiFiClient &client) {
   response += "<input class=\"longInput\" type=\"text\" name=\"delay\" placeholder=\"发送延迟(ms)\">";
   response += "<input type=\"submit\" value=\"设置延迟\">";
   response += "</div>";
+  response += "</form>";
+  response += "</div>";
+  response += "</div>";
+
+  response += "<h2>控制</h2>";
+  response += "<div class=\"center\">";
+  response += "<div class=\"button-container\">";
+  response += "<input type=\"submit\" form=\"deauthForm\" value=\"攻击!\">";
+  response += "<form method=\"post\" action=\"/stop\" data-ajax=\"stop\">";
+  response += "<input type=\"submit\" value=\"停止\">";
   response += "</form>";
   response += "</div>";
   response += "</div>";
@@ -1031,7 +1030,7 @@ void handleRoot(WiFiClient &client) {
         e.preventDefault();
         var form = e.currentTarget;
         var kind = form.getAttribute('data-ajax');
-        var btn = form.querySelector('input[type=submit], button[type=submit]');
+        var btn = form.querySelector('input[type=submit], button[type=submit]') || (form.id ? document.querySelector('[form=' + form.id + ']') : null);
         var body = serializeForm(form);
 
         if (kind === 'deauth' && body.indexOf('network=') === -1) {
