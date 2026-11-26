@@ -490,120 +490,125 @@ void handleRoot(WiFiClient &client) {
   <html lang="zh-CN">
   <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=0.8, minimal-ui">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, minimal-ui">
     <meta name="theme-color" content="#36393E">
     <title>RTL8720dn-Deauther</title>
     <style>
-    /* Base on Spacehuhn css file. Copyright (c) 2020 Spacehuhn Technologies: https://github.com/spacehuhntech/esp8266_deauther */
+      * { box-sizing: border-box; }
       body {
         background: #36393e;
-        color: #bfbfbf;
+        color: #dcddde;
         font-family: sans-serif;
-      }
-
-      h3{
-        background: #2f3136;
-        color: #bfbfbb;
-        padding: .2em 1em;
-        border-radius: 3px;
-        // border-left: solid #20c20e 5px;
-        font-weight: 100;
-        text-align: center;
-        width: 50%;
-      }
-
-      .centered{
-        display: flex;
-        justify-content: center;
-      }
-      h1 {
-        font-size: 1.7rem;
-        margin-top: 1rem;
-        background: #2f3136;
-        color: #bfbfbb;
-        padding: .2em 1em;
-        border-radius: 3px;
-        border-left: solid #20c20e 5px;
-        border-right: solid #20c20e 5px;
-        font-weight: 100;
-        text-align: center;
-      }
-
-      h2 {
-        font-size: 1.1rem;
-        margin-top: 1rem;
-        background: #2f3136;
-        color: #bfbfbb;
-        padding: .4em 1em;
-        border-radius: 3px;
-        border-left: solid #20c20e 5px;
-        font-weight: 100;
-      }
-
-      table {
-        border-collapse: collapse;
-        width: 100%;
-        min-width: auto;
-        margin-bottom: 2em;
-      }
-
-      td {
-        word-break: keep-all;
-        // padding: 10px 6px;
-        text-align: left;
-        border-bottom: 1px solid #5d5d5d;
-      }
-      
-      .tdMeter {
-        word-break: break-all;
-        // padding: 10px 6px;
-        padding-right: 10px;
-        text-align: left;
-        border-bottom: 1px solid #5d5d5d;
-      }
-
-      .tdFixed{
-        word-break: keep-all;
-        padding: 10px 6px;
-        text-align: center;
-        border-bottom: 1px solid #5d5d5d;
-      }
-
-      th {
-          word-break: break-word;
-          // padding: 10px 6px;
-          text-align: left;
-          border-bottom: 1px solid #5d5d5d;
-      }
-
-      p {
-        margin: .5em 0;
-      }
-      .bold {
-        font-weight: bold;
-      }
-
-      .center {
-      display: flex;
-      justify-content: center;
-      align-items: center;
+        margin: 0;
+        padding: 14px;
       }
 
       .container {
         display: flex;
         flex-direction: column;
         width: 100%;
+        max-width: 520px;
+        margin: 0 auto;
+      }
+
+      h1 {
+        font-size: 1.45rem;
+        background: #2f3136;
+        color: #fff;
+        padding: 12px 16px;
+        border-radius: 6px;
+        border-left: 5px solid #20c20e;
+        border-right: 5px solid #20c20e;
+        text-align: center;
+        margin: 0 0 16px 0;
+      }
+
+      h2 {
+        font-size: 1.05rem;
+        background: #2f3136;
+        color: #dcddde;
+        padding: 8px 14px;
+        border-radius: 4px;
+        border-left: 4px solid #20c20e;
+        margin: 16px 0 10px 0;
+      }
+
+      h3 {
+        font-size: 0.95rem;
+        background: #2f3136;
+        color: #dcddde;
+        padding: 6px 14px;
+        border-radius: 4px;
+        text-align: center;
+        width: 56%;
+        margin: 8px 0 10px 0;
+      }
+
+      .centered {
+        display: flex;
+        justify-content: center;
+      }
+
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        background: #2f3136;
+        border-radius: 6px;
+        overflow: hidden;
+        margin-bottom: 14px;
+      }
+
+      th, td {
+        padding: 8px 6px;
+        text-align: left;
+        border-bottom: 1px solid #454950;
+        font-size: 13px;
+      }
+
+      th {
+        color: #9ea3a8;
+        font-weight: 600;
+      }
+
+      td {
+        word-break: break-word;
+      }
+
+      .tdMeter {
+        word-break: normal;
+        padding-right: 8px;
+        min-width: 68px;
+      }
+
+      .tdFixed {
+        word-break: keep-all;
+        padding: 8px 4px;
+        text-align: center;
+        white-space: nowrap;
+      }
+
+      p {
+        margin: .5em 0;
+      }
+      .bold {
+        font-weight: 600;
+      }
+
+      .center {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        margin: 6px 0;
       }
 
       .checkBoxContainer {
         display: block;
         position: relative;
-        padding-left: 25px;
-        margin-bottom: 12px;
+        padding-left: 24px;
+        margin: 0;
         cursor: pointer;
-        font-size: 22px;
         user-select: none;
-        height: 32px;
+        height: 24px;
       }
 
       .checkBoxContainer input {
@@ -614,11 +619,12 @@ void handleRoot(WiFiClient &client) {
 
       .checkmark {
         position: absolute;
-        top: 8px;
+        top: 0;
         left: 0;
-        height: 28px;
-        width: 28px;
-        background-color: #2F3136;
+        height: 24px;
+        width: 24px;
+        background-color: #202225;
+        border: 1px solid #4f545c;
         border-radius: 4px;
       }
 
@@ -628,74 +634,67 @@ void handleRoot(WiFiClient &client) {
         display: none;
       }
 
+      .checkBoxContainer input:checked ~ .checkmark {
+        border-color: #20c20e;
+      }
+
       .checkBoxContainer input:checked ~ .checkmark:after {
         display: block;
       }
 
       .checkBoxContainer .checkmark:after {
-        left: 10px;
-        top: 7px;
+        left: 8px;
+        top: 4px;
         width: 4px;
         height: 10px;
-        border: solid white;
+        border: solid #20c20e;
         border-width: 0 3px 3px 0;
         transform: rotate(45deg);
       }
-              /* Meter */
-      .meter_background{
+
+      .meter_background {
         background: #42464D;
-        // width: 100%;
+        border-radius: 3px;
+        overflow: hidden;
         word-break: normal;
-        // min-width: 100px;
-        // min-width: 45px;
       }
-      .meter_forground{
+      .meter_forground {
         color: #fff;
-        padding: 4px 0;
-        /* + one of the colors below
-        (width will be set by the JS) */
+        padding: 3px 0;
+        font-size: 12px;
       }
-      .meter_green{
+      .meter_green {
         background: #43B581;
       }
-      .meter_orange{
+      .meter_orange {
         background: #FAA61A;
       }
-      .meter_red{
+      .meter_red {
         background: #F04747;
       }
-      .meter_value{
-        padding-left: 8px;
-      }
-
-      @keyframes fadeIn {
-        0% {
-            opacity: 0;
-        }
-        100% {
-            opacity: 1;
-        }
+      .meter_value {
+        padding-left: 6px;
       }
 
       hr {
         background: #3e4146;
       }
-      
+
       .button-container {
-        display: flex; /* Usar flexbox */
-        justify-content: start; /* Espacio entre los botones */
-        align-items: center; /* Centra los elementos horizontalmente */
-        align-content: center;
-        column-gap: 15px;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        align-items: center;
+        gap: 10px;
       }
 
-      .button-double{
-        display: flex; /* Usar flexbox */
+      .button-double {
+        display: flex;
         flex-direction: column;
-        justify-content: start; /* Espacio entre los botones */
-        align-items: center; /* Centra los elementos horizontalmente */
-        align-content: center;
-        row-gap: 15px;
+        justify-content: center;
+        align-items: center;
+        row-gap: 12px;
+        width: 100%;
       }
 
       .upload-script,
@@ -706,21 +705,18 @@ void handleRoot(WiFiClient &client) {
       input[type=button] {
         display: inline-block;
         height: 38px;
-        // padding: 0 20px;
+        padding: 0 14px;
         color: #fff;
         text-align: center;
-        font-size: 11px;
+        font-size: 13px;
         font-weight: 600;
         line-height: 38px;
-        letter-spacing: .1rem;
-        text-transform: uppercase;
         text-decoration: none;
         white-space: nowrap;
         background: #2f3136;
         border-radius: 4px;
-        border: 0;
+        border: 1px solid #454950;
         cursor: pointer;
-        box-sizing: border-box;
       }
 
       button:hover,
@@ -734,18 +730,15 @@ void handleRoot(WiFiClient &client) {
       input[type=submit]:active,
       input[type=reset]:active,
       input[type=button]:active {
-        transform: scale(.93);
+        transform: scale(.96);
       }
 
-      button:disabled:hover,
-      input[type=submit]:disabled:hover,
-      input[type=reset]:disabled:hover,
-      input[type=button]:disabled:hover {
-        background: white;
+      button:disabled,
+      input[type=submit]:disabled,
+      input[type=reset]:disabled,
+      input[type=button]:disabled {
         cursor: not-allowed;
-        opacity: .40;
-        filter: alpha(opacity=40);
-        transform: scale(1);
+        opacity: .55;
       }
 
       button::-moz-focus-inner {
@@ -763,22 +756,32 @@ void handleRoot(WiFiClient &client) {
       select {
         text-align: center;
         height: 38px;
-        padding: 0 5px;
+        padding: 0 10px;
+        border-radius: 4px;
+        border: 1px solid #4f545c;
+        background: #202225;
+        color: #fff;
+        font-size: 14px;
       }
 
-      .shortInput{
+      input[type=text]:focus {
+        outline: none;
+        border-color: #20c20e;
+      }
+
+      .shortInput {
         width: 28px;
       }
 
-      .longInput{
-        width: 138px;
+      .longInput {
+        width: 165px;
       }
 
       #toast {
         position: fixed;
-        bottom: 20px;
+        top: 16px;
         left: 50%;
-        transform: translateX(-50%);
+        transform: translate(-50%, -8px);
         background: #202225;
         color: #fff;
         border-left: 4px solid #20c20e;
@@ -788,11 +791,12 @@ void handleRoot(WiFiClient &client) {
         box-shadow: 0 4px 12px rgba(0,0,0,0.45);
         opacity: 0;
         pointer-events: none;
-        transition: opacity 0.2s ease;
+        transition: opacity 0.2s ease, transform 0.2s ease;
         z-index: 999;
       }
       #toast.show {
         opacity: 1;
+        transform: translate(-50%, 0);
       }
       #toast.err {
         border-left-color: #f04747;
