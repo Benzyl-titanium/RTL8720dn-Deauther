@@ -34,24 +34,27 @@ https://github.com/ambiot/ambd_arduino/raw/master/Arduino_package/package_realte
 
 ### 修改程序
 
-- 下载[RTL8720dn-Deauther.zip](RTL8720dn-Deauther.zip)，解压后用Arduino IDE打开。当然你也可以用英文原版。  
-- 这个模块会建立一个WiFi供你连接到后台，在文件的25和26行，你可以自定你的WiFi名字和密码。
+```
+git clone https://github.com/Benzyl-titanium/RTL8720dn-Deauther.git
+```
+
+- 用Arduino IDE打开RTL8720dn-Deauther/RTL8720dn-Deauther/RTL8720dn-Deauther.ino
+- 这个模块会建立一个WiFi供你连接到后台，你可以自定你的WiFi名字和密码以及板子的ip。
 
 ```ino
-char *ssid = "RTL8720dn-Deauther"; // wifi名称
-char *pass = "0123456789"; // wifi密码
+37 const char *DEFAULT_SSID = "BW16"; // 默认 WiFi 名称
+38 const char *DEFAULT_PASS = "1234567890";             // 默认 WiFi 密码 (8~63位，留空为开放网络)
+39 const uint8_t DEFAULT_IP[4] = {192, 168, 1, 1};    // 默认后台管理 IP
 ```
 
 ### 上传程序
 
 你的板子应该还在电脑上连着，现在拿着它。
 
-按住`BURN`按钮不松手，然后点一下`RST`按钮，接着松开`BURN`按钮，板子会进入下载模式。  
-USB-C接口向下，一般来说`BURN`按钮是右边那个。
-
 ![BW16-kit](imgs/BW16-kit.png)
 
-点击Arduino IDE左上角的上传按钮（向右箭头），等待编译和上传完成即可。
+点击Arduino IDE左上角的上传按钮（向右箭头），等待的五秒内，按住`BURN`按钮不松手，然后点一下`RST`按钮，接着松开`BURN`按钮，板子会进入下载模式。  
+USB-C接口向下，一般来说`BURN`按钮是右边那个，然后等待编译和上传完成即可。
 
 ![上传](imgs/upload.png)
 
@@ -77,6 +80,10 @@ BSSID码掉了。
 
 > [!tip]
 > 开始攻击后，RTL8720DN的wifi也会无法连接。
+
+在Web界面也可以修改WiFi和IP信息。
+
+![展示2](imgs/test2.png)
 
 ## 疑问
 

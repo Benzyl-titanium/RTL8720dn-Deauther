@@ -1,6 +1,8 @@
 #include "vector"
 #include "wifi_conf.h"
 #include "map"
+#include "stddef.h"
+#include "FlashMemory.h"
 #include "wifi_cust_tx.h"
 #include "wifi_util.h"
 #include "wifi_structures.h"
@@ -8,6 +10,16 @@
 #include "WiFi.h"
 #include "WiFiServer.h"
 #include "WiFiClient.h"
+
+#include "lwip/init.h"
+#include "lwip/netif.h"
+
+extern "C" {
+void sys_reset(void);
+void dhcps_deinit(void);
+void dhcps_init(struct netif *pnetif);
+extern struct netif xnetif[];
+}
 
 // LEDs:
 //  Red: System usable, Web server active etc.
@@ -22,8 +34,23 @@ typedef struct {
   uint8_t channel;
 } WiFiScanResult;
 
-char *ssid = "RTL8720dn-Deauther"; // wifi名称
-char *pass = "0123456789"; // wifi密码
+const char *DEFAULT_SSID = "BW16"; // 默认 WiFi 名称
+const char *DEFAULT_PASS = "1234567890";             // 默认 WiFi 密码 (8~63位，留空为开放网络)
+const uint8_t DEFAULT_IP[4] = {192, 168, 1, 1};    // 默认后台管理 IP
+
+#define NET_CFG_MAGIC 0x42573137UL
+
+typedef struct __attribute__((packed)) {
+  uint32_t magic;
+  char ssid[33];
+  char pass[65];
+  uint8_t ip[4];
+  uint32_t checksum;
+} NetConfig;
+
+NetConfig net_cfg;
+char *ssid = net_cfg.ssid;
+char *pass = net_cfg.pass;
 
 int current_channel = 1;
 std::vector<WiFiScanResult> scan_results;
@@ -72,13 +99,237 @@ int scanNetworks() {
   }
 }
 
+uint32_t calcConfigChecksum(const uint8_t *data, size_t len) {
+  uint32_t hash = 2166136261UL;
+  for (size_t i = 0; i < len; i++) {
+    hash ^= data[i];
+    hash *= 16777619UL;
+  }
+  return hash;
+}
+
+bool isValidUnicastIPv4(const uint8_t ip[4]) {
+  if (ip[0] == 0 || ip[0] == 127 || ip[0] >= 224) return false;
+  if (ip[3] == 0 || ip[3] == 255) return false;
+  return true;
+}
+
+bool parseIPv4(const String &ip_str, uint8_t out_ip[4]) {
+  String s = ip_str;
+  s.trim();
+  int len = s.length();
+  if (len < 7 || len > 15) return false;
+
+  int part = 0;
+  int val = 0;
+  int digits = 0;
+
+  for (int i = 0; i <= len; i++) {
+    char c = (i < len) ? s[i] : '.';
+    if (c >= '0' && c <= '9') {
+      if (digits == 1 && val == 0) return false;
+      val = val * 10 + (c - '0');
+      digits++;
+      if (digits > 3 || val > 255) return false;
+    } else if (c == '.') {
+      if (digits == 0 || part >= 4) return false;
+      out_ip[part++] = (uint8_t)val;
+      val = 0;
+      digits = 0;
+    } else {
+      return false;
+    }
+  }
+
+  if (part != 4) return false;
+  return isValidUnicastIPv4(out_ip);
+}
+
+String formatIPv4(const uint8_t ip[4]) {
+  return String(ip[0]) + "." + String(ip[1]) + "." + String(ip[2]) + "." + String(ip[3]);
+}
+
+String getCurrentIPString() {
+  IPAddress cur = WiFi.localIP();
+  if (cur[0] == 0 && cur[1] == 0 && cur[2] == 0 && cur[3] == 0) {
+    return formatIPv4(net_cfg.ip);
+  }
+  return String(cur[0]) + "." + String(cur[1]) + "." + String(cur[2]) + "." + String(cur[3]);
+}
+
+void setDefaultNetConfig() {
+  memset(&net_cfg, 0, sizeof(NetConfig));
+  net_cfg.magic = NET_CFG_MAGIC;
+  strncpy(net_cfg.ssid, DEFAULT_SSID, sizeof(net_cfg.ssid) - 1);
+  strncpy(net_cfg.pass, DEFAULT_PASS, sizeof(net_cfg.pass) - 1);
+  memcpy(net_cfg.ip, DEFAULT_IP, 4);
+  net_cfg.checksum = calcConfigChecksum((const uint8_t *)&net_cfg, offsetof(NetConfig, checksum));
+}
+
+void loadNetConfig() {
+  setDefaultNetConfig();
+  FlashMemory.read();
+  if (FlashMemory.buf == NULL) return;
+
+  NetConfig stored;
+  memcpy(&stored, FlashMemory.buf, sizeof(NetConfig));
+  stored.ssid[sizeof(stored.ssid) - 1] = '\0';
+  stored.pass[sizeof(stored.pass) - 1] = '\0';
+
+  uint32_t expected = calcConfigChecksum((const uint8_t *)&stored, offsetof(NetConfig, checksum));
+  size_t ssid_len = strlen(stored.ssid);
+  size_t pass_len = strlen(stored.pass);
+
+  if (stored.magic == NET_CFG_MAGIC &&
+      stored.checksum == expected &&
+      ssid_len >= 1 && ssid_len <= 32 &&
+      (pass_len == 0 || (pass_len >= 8 && pass_len <= 63)) &&
+      isValidUnicastIPv4(stored.ip)) {
+    memcpy(&net_cfg, &stored, sizeof(NetConfig));
+  }
+}
+
+void saveNetConfig() {
+  net_cfg.magic = NET_CFG_MAGIC;
+  net_cfg.ssid[sizeof(net_cfg.ssid) - 1] = '\0';
+  net_cfg.pass[sizeof(net_cfg.pass) - 1] = '\0';
+  net_cfg.checksum = calcConfigChecksum((const uint8_t *)&net_cfg, offsetof(NetConfig, checksum));
+
+  FlashMemory.read();
+  if (FlashMemory.buf != NULL) {
+    memcpy(FlashMemory.buf, &net_cfg, sizeof(NetConfig));
+    FlashMemory.update();
+  }
+}
+
+void startAP() {
+  IPAddress local_ip(net_cfg.ip[0], net_cfg.ip[1], net_cfg.ip[2], net_cfg.ip[3]);
+  IPAddress gateway(net_cfg.ip[0], net_cfg.ip[1], net_cfg.ip[2], net_cfg.ip[3]);
+  IPAddress subnet(255, 255, 255, 0);
+
+  WiFi.config(local_ip, gateway, gateway, subnet);
+
+  char ch_buf[8];
+  snprintf(ch_buf, sizeof(ch_buf), "%d", current_channel);
+  if (strlen(net_cfg.pass) >= 8) {
+    WiFi.apbegin(net_cfg.ssid, net_cfg.pass, ch_buf);
+  } else {
+    WiFi.apbegin(net_cfg.ssid, ch_buf);
+  }
+
+  dhcps_deinit();
+#if defined(LWIP_VERSION_MAJOR) && (LWIP_VERSION_MAJOR >= 2)
+  ip4_addr_t ipaddr, netmask, gw;
+#else
+  struct ip_addr ipaddr, netmask, gw;
+#endif
+  IP4_ADDR(&ipaddr, net_cfg.ip[0], net_cfg.ip[1], net_cfg.ip[2], net_cfg.ip[3]);
+  IP4_ADDR(&netmask, 255, 255, 255, 0);
+  IP4_ADDR(&gw, net_cfg.ip[0], net_cfg.ip[1], net_cfg.ip[2], net_cfg.ip[3]);
+  netif_set_addr(&xnetif[0], &ipaddr, &netmask, &gw);
+  netif_set_up(&xnetif[0]);
+  dhcps_init(&xnetif[0]);
+}
+
+int hexCharToInt(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+
+String urlDecode(const String &str) {
+  String decoded = "";
+  int len = str.length();
+  for (int i = 0; i < len; i++) {
+    char c = str[i];
+    if (c == '+') {
+      decoded += ' ';
+    } else if (c == '%' && i + 2 < len) {
+      int hi = hexCharToInt(str[i + 1]);
+      int lo = hexCharToInt(str[i + 2]);
+      if (hi >= 0 && lo >= 0) {
+        decoded += (char)((hi << 4) | lo);
+        i += 2;
+      } else {
+        decoded += c;
+      }
+    } else {
+      decoded += c;
+    }
+  }
+  return decoded;
+}
+
+String htmlEscape(const String &str) {
+  String out = "";
+  int len = str.length();
+  for (int i = 0; i < len; i++) {
+    char c = str[i];
+    if (c == '&') out += "&amp;";
+    else if (c == '<') out += "&lt;";
+    else if (c == '>') out += "&gt;";
+    else if (c == '"') out += "&quot;";
+    else if (c == '\'') out += "&#39;";
+    else out += c;
+  }
+  return out;
+}
+
+String readHttpRequest(WiFiClient &client) {
+  String request = "";
+  unsigned long start_ms = millis();
+  int header_end = -1;
+  int content_length = 0;
+
+  while (client.connected() && (millis() - start_ms < 1500)) {
+    while (client.available()) {
+      request += (char)client.read();
+      if (header_end == -1 && request.endsWith("\r\n\r\n")) {
+        header_end = request.length();
+        String lower_headers = request.substring(0, header_end);
+        lower_headers.toLowerCase();
+        int cl_idx = lower_headers.indexOf("content-length:");
+        if (cl_idx != -1) {
+          int line_end = lower_headers.indexOf("\r\n", cl_idx);
+          String cl_val = lower_headers.substring(cl_idx + 15, line_end != -1 ? line_end : header_end);
+          cl_val.trim();
+          content_length = cl_val.toInt();
+          if (content_length > 2048) content_length = 2048;
+        }
+        break;
+      }
+    }
+    if (header_end != -1) break;
+    delay(2);
+  }
+
+  if (header_end != -1 && content_length > 0) {
+    unsigned long body_start_ms = millis();
+    while (client.connected() &&
+           (int)(request.length() - header_end) < content_length &&
+           (millis() - body_start_ms < 1500)) {
+      while (client.available() && (int)(request.length() - header_end) < content_length) {
+        request += (char)client.read();
+      }
+      if ((int)(request.length() - header_end) < content_length) {
+        delay(2);
+      }
+    }
+  }
+  return request;
+}
+
 String parseRequest(String request) {
   int path_start = request.indexOf(' ');
   if (path_start < 0) return "/";
   path_start += 1;
   int path_end = request.indexOf(' ', path_start);
   if (path_end < 0) return "/";
-  return request.substring(path_start, path_end);
+  String path = request.substring(path_start, path_end);
+  int q = path.indexOf('?');
+  if (q >= 0) path = path.substring(0, q);
+  return path;
 }
 
 std::vector<std::pair<String, String>> parsePost(String &request) {
@@ -103,9 +354,9 @@ std::vector<std::pair<String, String>> parsePost(String &request) {
         int delimiter_position = key_value_pair.indexOf('=');
 
         if (delimiter_position != -1) {
-            String key = key_value_pair.substring(0, delimiter_position);
-            String value = key_value_pair.substring(delimiter_position + 1);
-            post_params.push_back({key, value}); // Add the key-value pair to the vector
+            String key = urlDecode(key_value_pair.substring(0, delimiter_position));
+            String value = urlDecode(key_value_pair.substring(delimiter_position + 1));
+            post_params.push_back({key, value});
         }
 
         start = end + 1;
@@ -116,8 +367,8 @@ std::vector<std::pair<String, String>> parsePost(String &request) {
     String key_value_pair = post_data.substring(start);
     int delimiter_position = key_value_pair.indexOf('=');
     if (delimiter_position != -1) {
-        String key = key_value_pair.substring(0, delimiter_position);
-        String value = key_value_pair.substring(delimiter_position + 1);
+        String key = urlDecode(key_value_pair.substring(0, delimiter_position));
+        String value = urlDecode(key_value_pair.substring(delimiter_position + 1));
         post_params.push_back({key, value});
     }
 
@@ -125,15 +376,18 @@ std::vector<std::pair<String, String>> parsePost(String &request) {
 }
 
 String makeResponse(int code, String content_type) {
-  String response = "HTTP/1.1 " + String(code) + " OK\n";
-  response += "Content-Type: " + content_type + "\n";
-  response += "Connection: close\n\n";
+  String reason = (code == 200) ? "OK" : ((code == 400) ? "Bad Request" : "Not Found");
+  String response = "HTTP/1.1 " + String(code) + " " + reason + "\r\n";
+  response += "Content-Type: " + content_type + "; charset=utf-8\r\n";
+  response += "Cache-Control: no-store\r\n";
+  response += "Connection: close\r\n\r\n";
   return response;
 }
 
 String makeRedirect(String url) {
-  String response = "HTTP/1.1 307 Temporary Redirect\n";
-  response += "Location: " + url;
+  String response = "HTTP/1.1 303 See Other\r\n";
+  response += "Location: " + url + "\r\n";
+  response += "Connection: close\r\n\r\n";
   return response;
 }
 
@@ -439,6 +693,9 @@ void handleRoot(WiFiClient &client) {
           <form method="post" action="/refresh">
               <input type="submit" value="刷新页面">
           </form>
+          <form method="get" action="/wifi">
+              <input type="submit" value="WiFi / IP 设置" style="border: 1px solid #20c20e; padding: 0 12px;">
+          </form>
         </div>
       </div>
       <form method="post" action="/deauth">
@@ -530,11 +787,13 @@ void handleRoot(WiFiClient &client) {
     <table>
       <tr><th>状态</th><th>当前状态</th></tr>
   )";
-  response += "<tr><td>攻击状态</td><td>" + String(isDeauthing ? "运行" : "停止") + "</th></tr>";
-  response += "<tr><td>LED启用</td><td>" + String(led ? "是" : "否") + "</th></tr>";
-  response += "<tr><td>发送帧数</td><td>" + String(sent_frames) + "</th></tr>";
-  response += "<tr><td>发送延迟</td><td>" + String(send_delay) + "</th></tr>";
-  response += "<tr><td>每次发送的帧数</td><td>" + String(frames_per_deauth) + "</th></tr>";
+  response += "<tr><td>热点名称 (SSID)</td><td>" + htmlEscape(String(net_cfg.ssid)) + "</td></tr>";
+  response += "<tr><td>后台管理 IP</td><td>" + getCurrentIPString() + "</td></tr>";
+  response += "<tr><td>攻击状态</td><td>" + String(isDeauthing ? "运行" : "停止") + "</td></tr>";
+  response += "<tr><td>LED启用</td><td>" + String(led ? "是" : "否") + "</td></tr>";
+  response += "<tr><td>发送帧数</td><td>" + String(sent_frames) + "</td></tr>";
+  response += "<tr><td>发送延迟</td><td>" + String(send_delay) + "</td></tr>";
+  response += "<tr><td>每次发送的帧数</td><td>" + String(frames_per_deauth) + "</td></tr>";
   response += "</table>";
   response += "<h2>设置</h2>";
   response += "<div class=\"center\">";
@@ -574,6 +833,343 @@ void handleRoot(WiFiClient &client) {
   client.write(response.c_str());
 }
 
+void handleWiFiConfig(WiFiClient &client) {
+  String cur_ssid = htmlEscape(String(net_cfg.ssid));
+  String cur_pass = htmlEscape(String(net_cfg.pass));
+  String cur_ip = getCurrentIPString();
+  String sec_mode = (strlen(net_cfg.pass) >= 8) ? "WPA2-PSK" : "开放网络 (无密码)";
+
+  String response = makeResponse(200, "text/html") + R"RAW(
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, minimal-ui">
+  <meta name="theme-color" content="#36393E">
+  <title>WiFi / IP 设置 - RTL8720dn-Deauther</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      background: #36393e;
+      color: #dcddde;
+      font-family: sans-serif;
+      margin: 0;
+      padding: 14px;
+    }
+    .wrap {
+      max-width: 520px;
+      margin: 0 auto;
+    }
+    h1 {
+      font-size: 1.45rem;
+      background: #2f3136;
+      color: #fff;
+      padding: 12px 16px;
+      border-radius: 6px;
+      border-left: 5px solid #20c20e;
+      border-right: 5px solid #20c20e;
+      text-align: center;
+      margin: 0 0 16px 0;
+    }
+    h2 {
+      font-size: 1.05rem;
+      background: #2f3136;
+      color: #dcddde;
+      padding: 8px 14px;
+      border-radius: 4px;
+      border-left: 4px solid #20c20e;
+      margin: 16px 0 10px 0;
+    }
+    .card {
+      background: #2f3136;
+      border-radius: 6px;
+      padding: 16px;
+      margin-bottom: 14px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    td {
+      padding: 8px 4px;
+      border-bottom: 1px solid #454950;
+      font-size: 14px;
+    }
+    td:first-child { color: #9ea3a8; width: 42%; }
+    .field { margin-bottom: 14px; }
+    label {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    input[type=text], input[type=password] {
+      width: 100%;
+      height: 40px;
+      padding: 0 12px;
+      border-radius: 4px;
+      border: 1px solid #4f545c;
+      background: #202225;
+      color: #fff;
+      font-size: 15px;
+    }
+    input[type=text]:focus, input[type=password]:focus {
+      outline: none;
+      border-color: #20c20e;
+    }
+    .hint {
+      font-size: 12px;
+      color: #9ea3a8;
+      margin-top: 5px;
+      line-height: 1.45;
+    }
+    .toggle-row {
+      margin-top: 6px;
+      font-size: 13px;
+      color: #b9bbbe;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+    }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 16px;
+    }
+    .btn {
+      flex: 1;
+      min-width: 130px;
+      height: 42px;
+      line-height: 42px;
+      border: 0;
+      border-radius: 4px;
+      color: #fff;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      text-align: center;
+      text-decoration: none;
+      display: inline-block;
+    }
+    .btn-primary { background: #20a80e; }
+    .btn-primary:hover { background: #26c212; }
+    .btn-secondary { background: #4f545c; }
+    .btn-secondary:hover { background: #5d636c; }
+    .btn-danger { background: #c0392b; }
+    .btn-danger:hover { background: #d64536; }
+    .err {
+      display: none;
+      background: #5c2323;
+      border-left: 4px solid #f04747;
+      color: #ffd6d6;
+      padding: 10px 12px;
+      border-radius: 4px;
+      margin-bottom: 12px;
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>WiFi / IP 网络设置</h1>
+
+  <h2>当前生效状态</h2>
+  <div class="card">
+    <table>
+      <tr><td>当前 WiFi 名称</td><td>)RAW" + cur_ssid + R"RAW(</td></tr>
+      <tr><td>当前加密方式</td><td>)RAW" + sec_mode + R"RAW(</td></tr>
+      <tr><td>当前管理 IP</td><td>)RAW" + cur_ip + R"RAW(</td></tr>
+      <tr><td>子网掩码</td><td>255.255.255.0</td></tr>
+    </table>
+  </div>
+
+  <h2>修改热点与 IP</h2>
+  <div class="card">
+    <div id="errBox" class="err"></div>
+    <form id="wifiForm" method="post" action="/setwifi" onsubmit="return validateForm()">
+      <div class="field">
+        <label for="ssid">WiFi 名称 (SSID)</label>
+        <input id="ssid" type="text" name="ssid" maxlength="32" required value=")RAW" + cur_ssid + R"RAW(">
+        <div class="hint">长度 1~32 字节（支持英文、数字、符号及中文）。</div>
+      </div>
+
+      <div class="field">
+        <label for="pass">WiFi 密码</label>
+        <input id="pass" type="password" name="pass" maxlength="63" value=")RAW" + cur_pass + R"RAW(">
+        <label class="toggle-row">
+          <input type="checkbox" onclick="document.getElementById('pass').type = this.checked ? 'text' : 'password'">
+          显示密码
+        </label>
+        <div class="hint">WPA2 加密需 8~63 位字符；留空则设为无密码开放热点。</div>
+      </div>
+
+      <div class="field">
+        <label for="ip">后台管理 IP 地址</label>
+        <input id="ip" type="text" name="ip" maxlength="15" required value=")RAW" + cur_ip + R"RAW(" placeholder="例如: 192.168.4.1">
+        <div class="hint">例如 192.168.1.1、192.168.8.1、10.0.0.1（末段需为 1~254）。保存后会自动持久化到 Flash 并重启 DHCP 服务。</div>
+      </div>
+
+      <div class="actions">
+        <button class="btn btn-primary" type="submit">保存并重启生效</button>
+        <a class="btn btn-secondary" href="/">返回控制面板</a>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <form method="post" action="/resetwifi" onsubmit="return confirm('确定要恢复出厂默认网络设置（)RAW" + String(DEFAULT_SSID) + R"RAW( / )RAW" + formatIPv4(DEFAULT_IP) + R"RAW(）并重启吗？')">
+      <button class="btn btn-danger" style="width:100%;" type="submit">恢复默认网络设置</button>
+    </form>
+  </div>
+</div>
+
+<script>
+function showErr(msg) {
+  var b = document.getElementById('errBox');
+  b.textContent = msg;
+  b.style.display = 'block';
+  return false;
+}
+function utf8Bytes(s) {
+  return window.TextEncoder ? new TextEncoder().encode(s).length : unescape(encodeURIComponent(s)).length;
+}
+function validateForm() {
+  var ssid = document.getElementById('ssid').value.trim();
+  var pass = document.getElementById('pass').value;
+  var ip = document.getElementById('ip').value.trim();
+
+  var ssidBytes = utf8Bytes(ssid);
+  if (ssidBytes < 1 || ssidBytes > 32) {
+    return showErr('WiFi 名称不能为空，且 UTF-8 长度不能超过 32 字节（当前 ' + ssidBytes + ' 字节）。');
+  }
+  if (pass.length > 0 && (pass.length < 8 || pass.length > 63)) {
+    return showErr('WiFi 密码长度必须为 8~63 位，或留空以使用无密码开放热点。');
+  }
+  var parts = ip.split('.');
+  if (parts.length !== 4) {
+    return showErr('IP 地址格式无效，请输入如 192.168.4.1 的 IPv4 地址。');
+  }
+  var nums = [];
+  for (var i = 0; i < 4; i++) {
+    if (!/^(0|[1-9][0-9]{0,2})$/.test(parts[i])) {
+      return showErr('IP 地址格式无效，每段必须为 0~255 的数字。');
+    }
+    var n = parseInt(parts[i], 10);
+    if (n < 0 || n > 255) return showErr('IP 地址每段必须在 0~255 之间。');
+    nums.push(n);
+  }
+  if (nums[0] === 0 || nums[0] === 127 || nums[0] >= 224 || nums[3] === 0 || nums[3] === 255) {
+    return showErr('请使用有效的局域网主机 IP（首段 1~223 且非 127，末段 1~254）。');
+  }
+
+  return confirm(
+    '即将保存并重启设备：\n' +
+    'WiFi 名称：' + ssid + '\n' +
+    'WiFi 密码：' + (pass.length ? pass : '无密码 (开放热点)') + '\n' +
+    '管理 IP：' + ip + '\n\n' +
+    '确认应用吗？'
+  );
+}
+</script>
+</body>
+</html>
+)RAW";
+  client.write(response.c_str());
+}
+
+void handleWiFiError(WiFiClient &client, const String &err_msg) {
+  String response = makeResponse(400, "text/html") + R"RAW(
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>配置错误</title>
+  <style>
+    body { background:#36393e; color:#dcddde; font-family:sans-serif; padding:24px; text-align:center; }
+    .box { max-width:440px; margin:40px auto; background:#2f3136; padding:22px; border-radius:8px; border-top:4px solid #f04747; }
+    a { display:inline-block; margin-top:16px; padding:10px 22px; background:#4f545c; color:#fff; text-decoration:none; border-radius:4px; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h2>参数校验失败</h2>
+    <p>)RAW" + htmlEscape(err_msg) + R"RAW(</p>
+    <a href="/wifi">返回重新填写</a>
+  </div>
+</body>
+</html>
+)RAW";
+  client.write(response.c_str());
+}
+
+void handleWiFiSavedAndReboot(WiFiClient &client, const String &title) {
+  String new_ip = formatIPv4(net_cfg.ip);
+  String new_ssid = htmlEscape(String(net_cfg.ssid));
+  String new_pass = (strlen(net_cfg.pass) >= 8) ? htmlEscape(String(net_cfg.pass)) : String("无密码 (开放热点)");
+
+  String response = makeResponse(200, "text/html") + R"RAW(
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>)RAW" + htmlEscape(title) + R"RAW(</title>
+  <style>
+    body { background:#36393e; color:#dcddde; font-family:sans-serif; padding:20px; }
+    .box { max-width:460px; margin:30px auto; background:#2f3136; padding:22px; border-radius:8px; border-top:4px solid #20c20e; }
+    h2 { margin-top:0; color:#fff; }
+    table { width:100%; border-collapse:collapse; margin:14px 0; }
+    td { padding:8px 4px; border-bottom:1px solid #454950; font-size:14px; }
+    td:first-child { color:#9ea3a8; width:38%; }
+    .tip { font-size:13px; color:#b9bbbe; line-height:1.6; }
+    .btn { display:block; margin-top:16px; padding:11px; background:#20a80e; color:#fff; text-align:center; text-decoration:none; border-radius:4px; font-weight:600; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h2>)RAW" + htmlEscape(title) + R"RAW(</h2>
+    <table>
+      <tr><td>新 WiFi 名称</td><td>)RAW" + new_ssid + R"RAW(</td></tr>
+      <tr><td>新 WiFi 密码</td><td>)RAW" + new_pass + R"RAW(</td></tr>
+      <tr><td>新管理地址</td><td>http://)RAW" + new_ip + R"RAW(</td></tr>
+    </table>
+    <p class="tip">
+      配置已写入 Flash，设备正在重启（约 6~10 秒完成启动与初始扫描）。<br>
+      请先在手机/电脑上连接到新 WiFi 热点，再打开新管理地址。
+    </p>
+    <a class="btn" href="http://)RAW" + new_ip + R"RAW(/">前往 http://)RAW" + new_ip + R"RAW( (<span id="sec">12</span>s)</a>
+  </div>
+  <script>
+    var s = 12;
+    var el = document.getElementById('sec');
+    var t = setInterval(function() {
+      s--;
+      if (s <= 0) {
+        clearInterval(t);
+        location.href = 'http://)RAW" + new_ip + R"RAW(/';
+      } else {
+        el.textContent = s;
+      }
+    }, 1000);
+  </script>
+</body>
+</html>
+)RAW";
+  client.write(response.c_str());
+  delay(150);
+  client.stop();
+  delay(800);
+
+  // 先干净关闭 DHCP 与 WiFi 驱动再软重启，防止客户端残留旧连接或驱动异常
+  dhcps_deinit();
+  wifi_off();
+  delay(100);
+  sys_reset();
+}
+
 void handle404(WiFiClient &client) {
   String response = makeResponse(404, "text/plain");
   response += "Not found!";
@@ -586,7 +1182,8 @@ void setup() {
   pinMode(LED_B, OUTPUT);
 
   DEBUG_SER_INIT();
-  WiFi.apbegin(ssid, pass, (char *)String(current_channel).c_str());
+  loadNetConfig();
+  startAP();
 
   scanNetworks();
 
@@ -615,16 +1212,71 @@ void loop() {
     if (led) {
       digitalWrite(LED_G, HIGH);
     }
-    String request;
-    while (client.available()) {
-      request += (char)client.read();
-    }
+    String request = readHttpRequest(client);
     DEBUG_SER_PRINT(request);
     String path = parseRequest(request);
     DEBUG_SER_PRINT("\nRequested path: " + path + "\n");
 
     if (path == "/") {
       handleRoot(client);
+    } else if (path == "/wifi") {
+      handleWiFiConfig(client);
+    } else if (path == "/setwifi") {
+      std::vector<std::pair<String, String>> post_data = parsePost(request);
+      String new_ssid = "";
+      String new_pass = "";
+      String new_ip_str = "";
+      bool has_ssid = false;
+      bool has_pass = false;
+      bool has_ip = false;
+
+      for (auto &param : post_data) {
+        if (param.first == "ssid") {
+          new_ssid = param.second;
+          new_ssid.trim();
+          has_ssid = true;
+        } else if (param.first == "pass") {
+          new_pass = param.second;
+          has_pass = true;
+        } else if (param.first == "ip") {
+          new_ip_str = param.second;
+          new_ip_str.trim();
+          has_ip = true;
+        }
+      }
+
+      uint8_t parsed_ip[4];
+      if (!has_ssid || new_ssid.length() < 1 || new_ssid.length() > 32) {
+        handleWiFiError(client, "WiFi 名称 (SSID) 长度必须为 1~32 字节。");
+      } else if (has_pass && new_pass.length() > 0 && (new_pass.length() < 8 || new_pass.length() > 63)) {
+        handleWiFiError(client, "WiFi 密码长度必须为 8~63 位，或留空以使用开放网络。");
+      } else if (!has_ip || !parseIPv4(new_ip_str, parsed_ip)) {
+        handleWiFiError(client, "IP 地址格式无效（请输入如 192.168.4.1 的有效局域网主机 IPv4 地址）。");
+      } else {
+        deauth_channels.clear();
+        chs_idx.clear();
+        isDeauthing = false;
+
+        memset(net_cfg.ssid, 0, sizeof(net_cfg.ssid));
+        strncpy(net_cfg.ssid, new_ssid.c_str(), sizeof(net_cfg.ssid) - 1);
+        memset(net_cfg.pass, 0, sizeof(net_cfg.pass));
+        if (has_pass && new_pass.length() >= 8) {
+          strncpy(net_cfg.pass, new_pass.c_str(), sizeof(net_cfg.pass) - 1);
+        }
+        memcpy(net_cfg.ip, parsed_ip, 4);
+        saveNetConfig();
+
+        handleWiFiSavedAndReboot(client, "WiFi 与 IP 设置已保存");
+        return;
+      }
+    } else if (path == "/resetwifi") {
+      deauth_channels.clear();
+      chs_idx.clear();
+      isDeauthing = false;
+      setDefaultNetConfig();
+      saveNetConfig();
+      handleWiFiSavedAndReboot(client, "已恢复默认网络设置");
+      return;
     } else if (path == "/rescan") {
       client.write(makeRedirect("/").c_str());
       scanNetworks();
@@ -635,9 +1287,11 @@ void loop() {
       for (auto &param : post_data) {
         if (param.first == "network") {
           int idx = String(param.second).toInt();
-          int ch = scan_results[idx].channel;
-          deauth_channels[ch].push_back(idx);
-          chs_idx.push_back(ch);
+          if (idx >= 0 && (size_t)idx < scan_results.size()) {
+            int ch = scan_results[idx].channel;
+            deauth_channels[ch].push_back(idx);
+            chs_idx.push_back(ch);
+          }
         } else if (param.first == "reason") {
           deauth_reason = String(param.second).toInt();
         }
