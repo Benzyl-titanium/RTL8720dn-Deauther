@@ -957,21 +957,24 @@ void handleRoot(WiFiClient &client) {
   response += "</div>";
   response += R"RAW(
   <script>
-  (function() {
+  (() => {
     var toastTimer = null;
-    function showToast(msg, isErr) {
+    var showToast = (msg, isErr) => {
       var t = document.getElementById('toast');
       t.textContent = msg;
       t.className = isErr ? 'show err' : 'show';
       if (toastTimer) clearTimeout(toastTimer);
-      toastTimer = setTimeout(function() { t.className = ''; }, 2200);
-    }
+      toastTimer = setTimeout(() => { t.className = ''; }, 2200);
+    };
 
-    function escHtml(s) {
-      return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-    }
+    var escHtml = (s) => String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/\x22/g, '&quot;')
+      .replace(/'/g, '&#39;');
 
-    function updateStatus(d) {
+    var updateStatus = (d) => {
       if (!d) return;
       if (typeof d.running === 'boolean') document.getElementById('st_run').textContent = d.running ? '运行' : '停止';
       if (typeof d.led === 'boolean') document.getElementById('st_led').textContent = d.led ? '是' : '否';
@@ -979,23 +982,23 @@ void handleRoot(WiFiClient &client) {
       if (typeof d.send_delay === 'number') document.getElementById('st_delay').textContent = d.send_delay;
       if (typeof d.frames_per_deauth === 'number') document.getElementById('st_frames').textContent = d.frames_per_deauth;
       if (typeof d.ap_count === 'number') document.getElementById('apCount').textContent = d.ap_count;
-    }
+    };
 
-    function buildRow(ap) {
+    var buildRow = (ap) => {
       var width = ap.rssi + 120;
       var colorWidth = ap.rssi + 130;
       var color = colorWidth < 50 ? 'meter_red' : (colorWidth < 70 ? 'meter_orange' : 'meter_green');
       var ssid = (ap.ssid && ap.ssid.length > 0) ? escHtml(ap.ssid) : '**HIDDEN**';
       return '<tr>' +
         '<td>' + ssid + '</td>' +
-        '<td class="tdFixed">' + ap.channel + '</td>' +
+        '<td class=\'tdFixed\'>' + ap.channel + '</td>' +
         '<td>' + escHtml(ap.bssid) + '</td>' +
-        '<td class="tdMeter"><div class="meter_background"><div class="meter_forground ' + color + '" style="width:' + width + '%"><div class="meter_value">' + ap.rssi + '</div></div></div></td>' +
-        '<td><label class="checkBoxContainer"><input type="checkbox" name="network" value="' + ap.idx + '"><span class="checkmark"></span></label></td>' +
+        '<td class=\'tdMeter\'><div class=\'meter_background\'><div class=\'meter_forground ' + color + '\' style=\'width:' + width + '%\'><div class=\'meter_value\'>' + ap.rssi + '</div></div></div></td>' +
+        '<td><label class=\'checkBoxContainer\'><input type=\'checkbox\' name=\'network\' value=\'' + ap.idx + '\'><span class=\'checkmark\'></span></label></td>' +
         '</tr>';
-    }
+    };
 
-    function renderNetworks(list) {
+    var renderNetworks = (list) => {
       var html5 = '', html24 = '';
       for (var i = 0; i < list.length; i++) {
         if (list[i].channel >= 36) html5 += buildRow(list[i]);
@@ -1003,9 +1006,9 @@ void handleRoot(WiFiClient &client) {
       }
       document.getElementById('tb5g').innerHTML = html5;
       document.getElementById('tb24g').innerHTML = html24;
-    }
+    };
 
-    function serializeForm(form) {
+    var serializeForm = (form) => {
       var pairs = [];
       var els = form.elements;
       for (var i = 0; i < els.length; i++) {
@@ -1016,15 +1019,15 @@ void handleRoot(WiFiClient &client) {
         pairs.push(encodeURIComponent(el.name) + '=' + encodeURIComponent(el.value));
       }
       return pairs.join('&');
-    }
+    };
 
     var forms = document.querySelectorAll('form[data-ajax]');
     for (var i = 0; i < forms.length; i++) {
-      forms[i].addEventListener('submit', function(e) {
+      forms[i].addEventListener('submit', (e) => {
         e.preventDefault();
-        var form = this;
+        var form = e.currentTarget;
         var kind = form.getAttribute('data-ajax');
-        var btn = form.querySelector('input[type="submit"], button[type="submit"]');
+        var btn = form.querySelector('input[type=submit], button[type=submit]');
         var body = serializeForm(form);
 
         if (kind === 'deauth' && body.indexOf('network=') === -1) {
@@ -1046,11 +1049,11 @@ void handleRoot(WiFiClient &client) {
           },
           body: body
         })
-        .then(function(res) {
+        .then((res) => {
           if (!res.ok) throw new Error('HTTP ' + res.status);
           return res.json();
         })
-        .then(function(data) {
+        .then((data) => {
           updateStatus(data);
           if (kind === 'rescan' && Array.isArray(data.networks)) {
             renderNetworks(data.networks);
@@ -1071,10 +1074,10 @@ void handleRoot(WiFiClient &client) {
             showToast('LED 已关闭', false);
           }
         })
-        .catch(function() {
+        .catch(() => {
           showToast('请求失败，请检查设备连接状态', true);
         })
-        .finally(function() {
+        .finally(() => {
           if (btn) {
             btn.disabled = false;
             if (kind === 'rescan') btn.value = origText;
@@ -1299,13 +1302,13 @@ void handleWiFiConfig(WiFiClient &client) {
     <form id="wifiForm" method="post" action="/setwifi" onsubmit="return validateForm()">
       <div class="field">
         <label for="ssid">WiFi 名称 (SSID)</label>
-        <input id="ssid" type="text" name="ssid" maxlength="32" required value=")RAW" + cur_ssid + R"RAW(">
+        <input id="ssid" type="text" name="ssid" maxlength="32" required value=')RAW" + cur_ssid + R"RAW('>
         <div class="hint">长度 1~32 字节（支持英文、数字、符号及中文）。</div>
       </div>
 
       <div class="field">
         <label for="pass">WiFi 密码</label>
-        <input id="pass" type="password" name="pass" maxlength="63" value=")RAW" + cur_pass + R"RAW(">
+        <input id="pass" type="password" name="pass" maxlength="63" value=')RAW" + cur_pass + R"RAW('>
         <label class="toggle-row">
           <input type="checkbox" onclick="document.getElementById('pass').type = this.checked ? 'text' : 'password'">
           显示密码
@@ -1315,13 +1318,13 @@ void handleWiFiConfig(WiFiClient &client) {
 
       <div class="field">
         <label for="ip">后台管理 IP 地址</label>
-        <input id="ip" type="text" name="ip" maxlength="15" required value=")RAW" + cur_ip + R"RAW(" placeholder="例如: 192.168.4.1">
+        <input id="ip" type="text" name="ip" maxlength="15" required value=')RAW" + cur_ip + R"RAW(' placeholder="例如: 192.168.4.1">
         <div class="hint">例如 192.168.1.1、192.168.8.1、10.0.0.1（需为所选子网掩码内的有效主机 IP）。</div>
       </div>
 
       <div class="field">
         <label for="mask">子网掩码</label>
-        <input id="mask" type="text" name="mask" maxlength="15" required value=")RAW" + cur_mask + R"RAW(" placeholder="例如: 255.255.255.0">
+        <input id="mask" type="text" name="mask" maxlength="15" required value=')RAW" + cur_mask + R"RAW(' placeholder="例如: 255.255.255.0">
         <div class="presets">
           <button type="button" class="preset-btn" onclick="setMask('255.255.255.0')">/24 (255.255.255.0)</button>
           <button type="button" class="preset-btn" onclick="setMask('255.255.0.0')">/16 (255.255.0.0)</button>
@@ -1337,7 +1340,7 @@ void handleWiFiConfig(WiFiClient &client) {
           <input id="dhcp" type="checkbox" name="dhcp" value="1" )RAW" + dhcp_checked + R"RAW( onchange="toggleDhcpWarn()">
         </label>
         <div class="hint">开启后连接热点的设备会自动获取 IP；关闭后不分配 IP，需客户端手动设置同网段静态 IP。</div>
-        <div id="dhcpWarn" class="warn" style=")RAW" + dhcp_warn_style + R"RAW(">注意：关闭 DHCP 后，设备重启完成时手机/电脑连接热点将无法自动获得 IP，请手动配置与管理 IP 同网段的静态 IP 及对应子网掩码后再访问后台。</div>
+        <div id="dhcpWarn" class="warn" style=')RAW" + dhcp_warn_style + R"RAW('>注意：关闭 DHCP 后，设备重启完成时手机/电脑连接热点将无法自动获得 IP，请手动配置与管理 IP 同网段的静态 IP 及对应子网掩码后再访问后台。</div>
       </div>
 
       <div class="actions">
@@ -1348,30 +1351,28 @@ void handleWiFiConfig(WiFiClient &client) {
   </div>
 
   <div class="card">
-    <form method="post" action="/resetwifi" onsubmit="return confirm('确定要恢复出厂默认网络设置（)RAW" + String(DEFAULT_SSID) + R"RAW( / )RAW" + formatIPv4(DEFAULT_IP) + R"RAW( / )RAW" + formatIPv4(DEFAULT_MASK) + R"RAW( / DHCP )RAW" + String(DEFAULT_DHCP ? "开启" : "关闭") + R"RAW(）并重启吗？')">
+    <form method="post" action="/resetwifi" data-msg='确定要恢复出厂默认网络设置（)RAW" + String(DEFAULT_SSID) + R"RAW( / )RAW" + formatIPv4(DEFAULT_IP) + R"RAW( / )RAW" + formatIPv4(DEFAULT_MASK) + R"RAW( / DHCP )RAW" + String(DEFAULT_DHCP ? "开启" : "关闭") + R"RAW(）并重启吗？' onsubmit="return confirm(this.getAttribute('data-msg'))">
       <button class="btn btn-danger" style="width:100%;" type="submit">恢复默认网络设置</button>
     </form>
   </div>
 </div>
 
 <script>
-function setMask(val) {
+var setMask = (val) => {
   document.getElementById('mask').value = val;
-}
-function toggleDhcpWarn() {
+};
+var toggleDhcpWarn = () => {
   var on = document.getElementById('dhcp').checked;
   document.getElementById('dhcpWarn').style.display = on ? 'none' : 'block';
-}
-function showErr(msg) {
+};
+var showErr = (msg) => {
   var b = document.getElementById('errBox');
   b.textContent = msg;
   b.style.display = 'block';
   return false;
-}
-function utf8Bytes(s) {
-  return window.TextEncoder ? new TextEncoder().encode(s).length : unescape(encodeURIComponent(s)).length;
-}
-function parseIPv4Parts(str) {
+};
+var utf8Bytes = (s) => window.TextEncoder ? new TextEncoder().encode(s).length : unescape(encodeURIComponent(s)).length;
+var parseIPv4Parts = (str) => {
   var parts = str.split('.');
   if (parts.length !== 4) return null;
   var nums = [];
@@ -1382,17 +1383,15 @@ function parseIPv4Parts(str) {
     nums.push(n);
   }
   return nums;
-}
-function ipv4ToUint32(nums) {
-  return (((nums[0] << 24) | (nums[1] << 16) | (nums[2] << 8) | nums[3]) >>> 0);
-}
-function isValidMask(nums) {
+};
+var ipv4ToUint32 = (nums) => (((nums[0] << 24) | (nums[1] << 16) | (nums[2] << 8) | nums[3]) >>> 0);
+var isValidMask = (nums) => {
   var m = ipv4ToUint32(nums);
   if (m < 0xFF000000 || m > 0xFFFFFFFC) return false;
   var inv = (~m) >>> 0;
   return ((inv & (inv + 1)) >>> 0) === 0;
-}
-function validateForm() {
+};
+var validateForm = () => {
   var ssid = document.getElementById('ssid').value.trim();
   var pass = document.getElementById('pass').value;
   var ip = document.getElementById('ip').value.trim();
@@ -1431,7 +1430,7 @@ function validateForm() {
     'DHCP 服务：' + (dhcp ? '开启' : '关闭（需手动配置静态 IP）') + '\n\n' +
     '确认应用吗？'
   );
-}
+};
 </script>
 </body>
 </html>
@@ -1505,12 +1504,12 @@ void handleWiFiSavedAndReboot(WiFiClient &client, const String &title) {
       配置已写入 Flash，设备正在重启（约 6~10 秒完成启动与初始扫描）。<br>
       请先在手机/电脑上连接到新 WiFi 热点，再打开新管理地址。)RAW" + static_tip + R"RAW(
     </p>
-    <a class="btn" href="http://)RAW" + new_ip + R"RAW(/">前往 http://)RAW" + new_ip + R"RAW( (<span id="sec">12</span>s)</a>
+    <a class="btn" href='http://)RAW" + new_ip + R"RAW(/'>前往 http://)RAW" + new_ip + R"RAW( (<span id="sec">12</span>s)</a>
   </div>
   <script>
     var s = 12;
     var el = document.getElementById('sec');
-    var t = setInterval(function() {
+    var t = setInterval(() => {
       s--;
       if (s <= 0) {
         clearInterval(t);

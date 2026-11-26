@@ -53,11 +53,12 @@ git clone https://github.com/Benzyl-titanium/RTL8720dn-Deauther.git
 
 ### 上传程序
 
-你的板子应该还在电脑上连着，现在拿着它。
+你的板子应该还在电脑上连着，现在拿着它。  
+按住`BURN`按钮不松手，然后点一下`RST`按钮，接着松开`BURN`按钮。
 
 ![BW16-kit](imgs/BW16-kit.png)
 
-点击Arduino IDE左上角的上传按钮（向右箭头），等待的五秒内，按住`BURN`按钮不松手，然后点一下`RST`按钮，接着松开`BURN`按钮，板子会进入下载模式。  
+点击Arduino IDE左上角的上传按钮（向右箭头），在等待的五秒内，按住`BURN`按钮不松手，然后点一下`RST`按钮，接着松开`BURN`按钮，板子会进入下载模式。  
 USB-C接口向下，一般来说`BURN`按钮是右边那个，然后等待编译和上传完成即可。
 
 ![上传](imgs/upload.png)
