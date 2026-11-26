@@ -39,7 +39,7 @@ git clone https://github.com/Benzyl-titanium/RTL8720dn-Deauther.git
 ```
 
 - 用Arduino IDE打开RTL8720dn-Deauther/RTL8720dn-Deauther/RTL8720dn-Deauther.ino
-- 这个模块会建立一个WiFi供你连接到后台，你可以自定你的WiFi名称，密码，ip和掩码以及是否开启dhcp，这些也可以在Wbe上修改。
+- 这个模块会建立一个WiFi供你连接到后台，你可以自定你的WiFi名称，密码，ip和掩码以及是否开启dhcp，这些也可以Web上修改。
 
 ```ino
 37 const char *DEFAULT_SSID = "BW16"; // 默认 WiFi 名称
