@@ -36,15 +36,19 @@ typedef struct {
 
 const char *DEFAULT_SSID = "BW16"; // 默认 WiFi 名称
 const char *DEFAULT_PASS = "1234567890";             // 默认 WiFi 密码 (8~63位，留空为开放网络)
-const uint8_t DEFAULT_IP[4] = {192, 168, 1, 1};    // 默认后台管理 IP
+const uint8_t DEFAULT_IP[4] = {192, 168, 1, 1};      // 默认后台管理 IP
+const uint8_t DEFAULT_MASK[4] = {255, 255, 255, 0};  // 默认子网掩码
+const bool DEFAULT_DHCP = true;                      // 默认开启 DHCP 服务
 
-#define NET_CFG_MAGIC 0x42573137UL
+#define NET_CFG_MAGIC 0x42573138UL
 
 typedef struct __attribute__((packed)) {
   uint32_t magic;
   char ssid[33];
   char pass[65];
   uint8_t ip[4];
+  uint8_t mask[4];
+  uint8_t dhcp_enabled;
   uint32_t checksum;
 } NetConfig;
 
@@ -108,13 +112,29 @@ uint32_t calcConfigChecksum(const uint8_t *data, size_t len) {
   return hash;
 }
 
-bool isValidUnicastIPv4(const uint8_t ip[4]) {
+uint32_t ipv4ToUint32(const uint8_t ip[4]) {
+  return ((uint32_t)ip[0] << 24) | ((uint32_t)ip[1] << 16) | ((uint32_t)ip[2] << 8) | (uint32_t)ip[3];
+}
+
+bool isValidSubnetMask(const uint8_t mask[4]) {
+  uint32_t m = ipv4ToUint32(mask);
+  // 允许 /8 (255.0.0.0) ~ /30 (255.255.255.252) 的连续子网掩码
+  if (m < 0xFF000000UL || m > 0xFFFFFFFCUL) return false;
+  uint32_t inv = ~m;
+  return (inv & (inv + 1UL)) == 0;
+}
+
+bool isValidHostIPv4(const uint8_t ip[4], const uint8_t mask[4]) {
+  if (!isValidSubnetMask(mask)) return false;
   if (ip[0] == 0 || ip[0] == 127 || ip[0] >= 224) return false;
-  if (ip[3] == 0 || ip[3] == 255) return false;
+  uint32_t ip_u = ipv4ToUint32(ip);
+  uint32_t mask_u = ipv4ToUint32(mask);
+  uint32_t host = ip_u & ~mask_u;
+  if (host == 0 || host == ~mask_u) return false;
   return true;
 }
 
-bool parseIPv4(const String &ip_str, uint8_t out_ip[4]) {
+bool parseRawIPv4(const String &ip_str, uint8_t out_ip[4]) {
   String s = ip_str;
   s.trim();
   int len = s.length();
@@ -141,8 +161,7 @@ bool parseIPv4(const String &ip_str, uint8_t out_ip[4]) {
     }
   }
 
-  if (part != 4) return false;
-  return isValidUnicastIPv4(out_ip);
+  return part == 4;
 }
 
 String formatIPv4(const uint8_t ip[4]) {
@@ -163,6 +182,8 @@ void setDefaultNetConfig() {
   strncpy(net_cfg.ssid, DEFAULT_SSID, sizeof(net_cfg.ssid) - 1);
   strncpy(net_cfg.pass, DEFAULT_PASS, sizeof(net_cfg.pass) - 1);
   memcpy(net_cfg.ip, DEFAULT_IP, 4);
+  memcpy(net_cfg.mask, DEFAULT_MASK, 4);
+  net_cfg.dhcp_enabled = DEFAULT_DHCP ? 1 : 0;
   net_cfg.checksum = calcConfigChecksum((const uint8_t *)&net_cfg, offsetof(NetConfig, checksum));
 }
 
@@ -184,7 +205,9 @@ void loadNetConfig() {
       stored.checksum == expected &&
       ssid_len >= 1 && ssid_len <= 32 &&
       (pass_len == 0 || (pass_len >= 8 && pass_len <= 63)) &&
-      isValidUnicastIPv4(stored.ip)) {
+      isValidSubnetMask(stored.mask) &&
+      isValidHostIPv4(stored.ip, stored.mask) &&
+      (stored.dhcp_enabled == 0 || stored.dhcp_enabled == 1)) {
     memcpy(&net_cfg, &stored, sizeof(NetConfig));
   }
 }
@@ -205,7 +228,7 @@ void saveNetConfig() {
 void startAP() {
   IPAddress local_ip(net_cfg.ip[0], net_cfg.ip[1], net_cfg.ip[2], net_cfg.ip[3]);
   IPAddress gateway(net_cfg.ip[0], net_cfg.ip[1], net_cfg.ip[2], net_cfg.ip[3]);
-  IPAddress subnet(255, 255, 255, 0);
+  IPAddress subnet(net_cfg.mask[0], net_cfg.mask[1], net_cfg.mask[2], net_cfg.mask[3]);
 
   WiFi.config(local_ip, gateway, gateway, subnet);
 
@@ -224,11 +247,13 @@ void startAP() {
   struct ip_addr ipaddr, netmask, gw;
 #endif
   IP4_ADDR(&ipaddr, net_cfg.ip[0], net_cfg.ip[1], net_cfg.ip[2], net_cfg.ip[3]);
-  IP4_ADDR(&netmask, 255, 255, 255, 0);
+  IP4_ADDR(&netmask, net_cfg.mask[0], net_cfg.mask[1], net_cfg.mask[2], net_cfg.mask[3]);
   IP4_ADDR(&gw, net_cfg.ip[0], net_cfg.ip[1], net_cfg.ip[2], net_cfg.ip[3]);
   netif_set_addr(&xnetif[0], &ipaddr, &netmask, &gw);
   netif_set_up(&xnetif[0]);
-  dhcps_init(&xnetif[0]);
+  if (net_cfg.dhcp_enabled) {
+    dhcps_init(&xnetif[0]);
+  }
 }
 
 int hexCharToInt(char c) {
@@ -789,6 +814,8 @@ void handleRoot(WiFiClient &client) {
   )";
   response += "<tr><td>热点名称 (SSID)</td><td>" + htmlEscape(String(net_cfg.ssid)) + "</td></tr>";
   response += "<tr><td>后台管理 IP</td><td>" + getCurrentIPString() + "</td></tr>";
+  response += "<tr><td>子网掩码</td><td>" + formatIPv4(net_cfg.mask) + "</td></tr>";
+  response += "<tr><td>DHCP 服务</td><td>" + String(net_cfg.dhcp_enabled ? "开启" : "关闭") + "</td></tr>";
   response += "<tr><td>攻击状态</td><td>" + String(isDeauthing ? "运行" : "停止") + "</td></tr>";
   response += "<tr><td>LED启用</td><td>" + String(led ? "是" : "否") + "</td></tr>";
   response += "<tr><td>发送帧数</td><td>" + String(sent_frames) + "</td></tr>";
@@ -837,7 +864,11 @@ void handleWiFiConfig(WiFiClient &client) {
   String cur_ssid = htmlEscape(String(net_cfg.ssid));
   String cur_pass = htmlEscape(String(net_cfg.pass));
   String cur_ip = getCurrentIPString();
+  String cur_mask = formatIPv4(net_cfg.mask);
   String sec_mode = (strlen(net_cfg.pass) >= 8) ? "WPA2-PSK" : "开放网络 (无密码)";
+  String dhcp_status = net_cfg.dhcp_enabled ? "开启" : "关闭 (需手动配置静态 IP)";
+  String dhcp_checked = net_cfg.dhcp_enabled ? "checked" : "";
+  String dhcp_warn_style = net_cfg.dhcp_enabled ? "display:none;" : "display:block;";
 
   String response = makeResponse(200, "text/html") + R"RAW(
 <!DOCTYPE html>
@@ -923,6 +954,22 @@ void handleWiFiConfig(WiFiClient &client) {
       margin-top: 5px;
       line-height: 1.45;
     }
+    .presets {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 6px;
+    }
+    .preset-btn {
+      background: #3a3d44;
+      color: #dcddde;
+      border: 1px solid #4f545c;
+      border-radius: 4px;
+      padding: 4px 8px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .preset-btn:hover { background: #4f545c; }
     .toggle-row {
       margin-top: 6px;
       font-size: 13px;
@@ -931,6 +978,35 @@ void handleWiFiConfig(WiFiClient &client) {
       align-items: center;
       gap: 6px;
       cursor: pointer;
+      font-weight: normal;
+    }
+    .switch-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #202225;
+      border: 1px solid #4f545c;
+      border-radius: 4px;
+      padding: 10px 12px;
+      cursor: pointer;
+      font-weight: 600;
+      margin-bottom: 0;
+    }
+    .switch-row input[type=checkbox] {
+      width: 18px;
+      height: 18px;
+      accent-color: #20c20e;
+      cursor: pointer;
+    }
+    .warn {
+      background: #4e3b1c;
+      border-left: 4px solid #faa61a;
+      color: #ffe2b3;
+      padding: 8px 10px;
+      border-radius: 4px;
+      margin-top: 8px;
+      font-size: 12px;
+      line-height: 1.5;
     }
     .actions {
       display: flex;
@@ -981,11 +1057,12 @@ void handleWiFiConfig(WiFiClient &client) {
       <tr><td>当前 WiFi 名称</td><td>)RAW" + cur_ssid + R"RAW(</td></tr>
       <tr><td>当前加密方式</td><td>)RAW" + sec_mode + R"RAW(</td></tr>
       <tr><td>当前管理 IP</td><td>)RAW" + cur_ip + R"RAW(</td></tr>
-      <tr><td>子网掩码</td><td>255.255.255.0</td></tr>
+      <tr><td>当前子网掩码</td><td>)RAW" + cur_mask + R"RAW(</td></tr>
+      <tr><td>DHCP 服务</td><td>)RAW" + dhcp_status + R"RAW(</td></tr>
     </table>
   </div>
 
-  <h2>修改热点与 IP</h2>
+  <h2>修改热点与网络参数</h2>
   <div class="card">
     <div id="errBox" class="err"></div>
     <form id="wifiForm" method="post" action="/setwifi" onsubmit="return validateForm()">
@@ -1008,7 +1085,28 @@ void handleWiFiConfig(WiFiClient &client) {
       <div class="field">
         <label for="ip">后台管理 IP 地址</label>
         <input id="ip" type="text" name="ip" maxlength="15" required value=")RAW" + cur_ip + R"RAW(" placeholder="例如: 192.168.4.1">
-        <div class="hint">例如 192.168.1.1、192.168.8.1、10.0.0.1（末段需为 1~254）。保存后会自动持久化到 Flash 并重启 DHCP 服务。</div>
+        <div class="hint">例如 192.168.1.1、192.168.8.1、10.0.0.1（需为所选子网掩码内的有效主机 IP）。</div>
+      </div>
+
+      <div class="field">
+        <label for="mask">子网掩码</label>
+        <input id="mask" type="text" name="mask" maxlength="15" required value=")RAW" + cur_mask + R"RAW(" placeholder="例如: 255.255.255.0">
+        <div class="presets">
+          <button type="button" class="preset-btn" onclick="setMask('255.255.255.0')">/24 (255.255.255.0)</button>
+          <button type="button" class="preset-btn" onclick="setMask('255.255.0.0')">/16 (255.255.0.0)</button>
+          <button type="button" class="preset-btn" onclick="setMask('255.0.0.0')">/8 (255.0.0.0)</button>
+        </div>
+        <div class="hint">支持 /8 ~ /30 连续子网掩码（如 255.255.255.0、255.255.255.128）。</div>
+      </div>
+
+      <div class="field">
+        <label>DHCP 服务开关</label>
+        <label class="switch-row">
+          <span>启用 DHCP 自动分配 IP</span>
+          <input id="dhcp" type="checkbox" name="dhcp" value="1" )RAW" + dhcp_checked + R"RAW( onchange="toggleDhcpWarn()">
+        </label>
+        <div class="hint">开启后连接热点的设备会自动获取 IP；关闭后不分配 IP，需客户端手动设置同网段静态 IP。</div>
+        <div id="dhcpWarn" class="warn" style=")RAW" + dhcp_warn_style + R"RAW(">注意：关闭 DHCP 后，设备重启完成时手机/电脑连接热点将无法自动获得 IP，请手动配置与管理 IP 同网段的静态 IP 及对应子网掩码后再访问后台。</div>
       </div>
 
       <div class="actions">
@@ -1019,13 +1117,20 @@ void handleWiFiConfig(WiFiClient &client) {
   </div>
 
   <div class="card">
-    <form method="post" action="/resetwifi" onsubmit="return confirm('确定要恢复出厂默认网络设置（)RAW" + String(DEFAULT_SSID) + R"RAW( / )RAW" + formatIPv4(DEFAULT_IP) + R"RAW(）并重启吗？')">
+    <form method="post" action="/resetwifi" onsubmit="return confirm('确定要恢复出厂默认网络设置（)RAW" + String(DEFAULT_SSID) + R"RAW( / )RAW" + formatIPv4(DEFAULT_IP) + R"RAW( / )RAW" + formatIPv4(DEFAULT_MASK) + R"RAW( / DHCP )RAW" + String(DEFAULT_DHCP ? "开启" : "关闭") + R"RAW(）并重启吗？')">
       <button class="btn btn-danger" style="width:100%;" type="submit">恢复默认网络设置</button>
     </form>
   </div>
 </div>
 
 <script>
+function setMask(val) {
+  document.getElementById('mask').value = val;
+}
+function toggleDhcpWarn() {
+  var on = document.getElementById('dhcp').checked;
+  document.getElementById('dhcpWarn').style.display = on ? 'none' : 'block';
+}
 function showErr(msg) {
   var b = document.getElementById('errBox');
   b.textContent = msg;
@@ -1035,10 +1140,33 @@ function showErr(msg) {
 function utf8Bytes(s) {
   return window.TextEncoder ? new TextEncoder().encode(s).length : unescape(encodeURIComponent(s)).length;
 }
+function parseIPv4Parts(str) {
+  var parts = str.split('.');
+  if (parts.length !== 4) return null;
+  var nums = [];
+  for (var i = 0; i < 4; i++) {
+    if (!/^(0|[1-9][0-9]{0,2})$/.test(parts[i])) return null;
+    var n = parseInt(parts[i], 10);
+    if (n < 0 || n > 255) return null;
+    nums.push(n);
+  }
+  return nums;
+}
+function ipv4ToUint32(nums) {
+  return (((nums[0] << 24) | (nums[1] << 16) | (nums[2] << 8) | nums[3]) >>> 0);
+}
+function isValidMask(nums) {
+  var m = ipv4ToUint32(nums);
+  if (m < 0xFF000000 || m > 0xFFFFFFFC) return false;
+  var inv = (~m) >>> 0;
+  return ((inv & (inv + 1)) >>> 0) === 0;
+}
 function validateForm() {
   var ssid = document.getElementById('ssid').value.trim();
   var pass = document.getElementById('pass').value;
   var ip = document.getElementById('ip').value.trim();
+  var mask = document.getElementById('mask').value.trim();
+  var dhcp = document.getElementById('dhcp').checked;
 
   var ssidBytes = utf8Bytes(ssid);
   if (ssidBytes < 1 || ssidBytes > 32) {
@@ -1047,28 +1175,29 @@ function validateForm() {
   if (pass.length > 0 && (pass.length < 8 || pass.length > 63)) {
     return showErr('WiFi 密码长度必须为 8~63 位，或留空以使用无密码开放热点。');
   }
-  var parts = ip.split('.');
-  if (parts.length !== 4) {
+  var maskNums = parseIPv4Parts(mask);
+  if (!maskNums || !isValidMask(maskNums)) {
+    return showErr('子网掩码无效，请输入 /8 ~ /30 的连续有效掩码（如 255.255.255.0）。');
+  }
+  var ipNums = parseIPv4Parts(ip);
+  if (!ipNums) {
     return showErr('IP 地址格式无效，请输入如 192.168.4.1 的 IPv4 地址。');
   }
-  var nums = [];
-  for (var i = 0; i < 4; i++) {
-    if (!/^(0|[1-9][0-9]{0,2})$/.test(parts[i])) {
-      return showErr('IP 地址格式无效，每段必须为 0~255 的数字。');
-    }
-    var n = parseInt(parts[i], 10);
-    if (n < 0 || n > 255) return showErr('IP 地址每段必须在 0~255 之间。');
-    nums.push(n);
-  }
-  if (nums[0] === 0 || nums[0] === 127 || nums[0] >= 224 || nums[3] === 0 || nums[3] === 255) {
-    return showErr('请使用有效的局域网主机 IP（首段 1~223 且非 127，末段 1~254）。');
+  var ipU = ipv4ToUint32(ipNums);
+  var maskU = ipv4ToUint32(maskNums);
+  var invMask = (~maskU) >>> 0;
+  var host = (ipU & invMask) >>> 0;
+  if (ipNums[0] === 0 || ipNums[0] === 127 || ipNums[0] >= 224 || host === 0 || host === invMask) {
+    return showErr('请使用有效的局域网主机 IP（首段 1~223 且非 127，且不能为当前子网的网络地址或广播地址）。');
   }
 
   return confirm(
     '即将保存并重启设备：\n' +
     'WiFi 名称：' + ssid + '\n' +
     'WiFi 密码：' + (pass.length ? pass : '无密码 (开放热点)') + '\n' +
-    '管理 IP：' + ip + '\n\n' +
+    '管理 IP：' + ip + '\n' +
+    '子网掩码：' + mask + '\n' +
+    'DHCP 服务：' + (dhcp ? '开启' : '关闭（需手动配置静态 IP）') + '\n\n' +
     '确认应用吗？'
   );
 }
@@ -1107,8 +1236,11 @@ void handleWiFiError(WiFiClient &client, const String &err_msg) {
 
 void handleWiFiSavedAndReboot(WiFiClient &client, const String &title) {
   String new_ip = formatIPv4(net_cfg.ip);
+  String new_mask = formatIPv4(net_cfg.mask);
   String new_ssid = htmlEscape(String(net_cfg.ssid));
   String new_pass = (strlen(net_cfg.pass) >= 8) ? htmlEscape(String(net_cfg.pass)) : String("无密码 (开放热点)");
+  String new_dhcp = net_cfg.dhcp_enabled ? String("开启") : String("关闭 (需手动设置静态 IP)");
+  String static_tip = net_cfg.dhcp_enabled ? String("") : String("<br><b>DHCP 已关闭：</b>请在手机/电脑上手动设置与 ") + new_ip + String(" 同网段的静态 IP（子网掩码 ") + new_mask + String("）后再访问后台。");
 
   String response = makeResponse(200, "text/html") + R"RAW(
 <!DOCTYPE html>
@@ -1135,10 +1267,12 @@ void handleWiFiSavedAndReboot(WiFiClient &client, const String &title) {
       <tr><td>新 WiFi 名称</td><td>)RAW" + new_ssid + R"RAW(</td></tr>
       <tr><td>新 WiFi 密码</td><td>)RAW" + new_pass + R"RAW(</td></tr>
       <tr><td>新管理地址</td><td>http://)RAW" + new_ip + R"RAW(</td></tr>
+      <tr><td>新子网掩码</td><td>)RAW" + new_mask + R"RAW(</td></tr>
+      <tr><td>DHCP 服务</td><td>)RAW" + new_dhcp + R"RAW(</td></tr>
     </table>
     <p class="tip">
       配置已写入 Flash，设备正在重启（约 6~10 秒完成启动与初始扫描）。<br>
-      请先在手机/电脑上连接到新 WiFi 热点，再打开新管理地址。
+      请先在手机/电脑上连接到新 WiFi 热点，再打开新管理地址。)RAW" + static_tip + R"RAW(
     </p>
     <a class="btn" href="http://)RAW" + new_ip + R"RAW(/">前往 http://)RAW" + new_ip + R"RAW( (<span id="sec">12</span>s)</a>
   </div>
@@ -1226,9 +1360,12 @@ void loop() {
       String new_ssid = "";
       String new_pass = "";
       String new_ip_str = "";
+      String new_mask_str = "";
       bool has_ssid = false;
       bool has_pass = false;
       bool has_ip = false;
+      bool has_mask = false;
+      bool new_dhcp = false;
 
       for (auto &param : post_data) {
         if (param.first == "ssid") {
@@ -1242,16 +1379,30 @@ void loop() {
           new_ip_str = param.second;
           new_ip_str.trim();
           has_ip = true;
+        } else if (param.first == "mask") {
+          new_mask_str = param.second;
+          new_mask_str.trim();
+          has_mask = true;
+        } else if (param.first == "dhcp") {
+          String v = param.second;
+          v.trim();
+          v.toLowerCase();
+          if (v == "1" || v == "on" || v == "true") {
+            new_dhcp = true;
+          }
         }
       }
 
       uint8_t parsed_ip[4];
+      uint8_t parsed_mask[4];
       if (!has_ssid || new_ssid.length() < 1 || new_ssid.length() > 32) {
         handleWiFiError(client, "WiFi 名称 (SSID) 长度必须为 1~32 字节。");
       } else if (has_pass && new_pass.length() > 0 && (new_pass.length() < 8 || new_pass.length() > 63)) {
         handleWiFiError(client, "WiFi 密码长度必须为 8~63 位，或留空以使用开放网络。");
-      } else if (!has_ip || !parseIPv4(new_ip_str, parsed_ip)) {
-        handleWiFiError(client, "IP 地址格式无效（请输入如 192.168.4.1 的有效局域网主机 IPv4 地址）。");
+      } else if (!has_mask || !parseRawIPv4(new_mask_str, parsed_mask) || !isValidSubnetMask(parsed_mask)) {
+        handleWiFiError(client, "子网掩码无效（请输入 /8 ~ /30 的连续有效掩码，例如 255.255.255.0）。");
+      } else if (!has_ip || !parseRawIPv4(new_ip_str, parsed_ip) || !isValidHostIPv4(parsed_ip, parsed_mask)) {
+        handleWiFiError(client, "IP 地址无效或与所选子网掩码不匹配（不能为网络地址或广播地址）。");
       } else {
         deauth_channels.clear();
         chs_idx.clear();
@@ -1264,9 +1415,11 @@ void loop() {
           strncpy(net_cfg.pass, new_pass.c_str(), sizeof(net_cfg.pass) - 1);
         }
         memcpy(net_cfg.ip, parsed_ip, 4);
+        memcpy(net_cfg.mask, parsed_mask, 4);
+        net_cfg.dhcp_enabled = new_dhcp ? 1 : 0;
         saveNetConfig();
 
-        handleWiFiSavedAndReboot(client, "WiFi 与 IP 设置已保存");
+        handleWiFiSavedAndReboot(client, "网络设置已保存");
         return;
       }
     } else if (path == "/resetwifi") {

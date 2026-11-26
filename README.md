@@ -39,13 +39,17 @@ git clone https://github.com/Benzyl-titanium/RTL8720dn-Deauther.git
 ```
 
 - 用Arduino IDE打开RTL8720dn-Deauther/RTL8720dn-Deauther/RTL8720dn-Deauther.ino
-- 这个模块会建立一个WiFi供你连接到后台，你可以自定你的WiFi名字和密码以及板子的ip。
+- 这个模块会建立一个WiFi供你连接到后台，你可以自定你的WiFi名称，密码，ip和掩码以及是否开启dhcp，这些也可以在Wbe上修改。
 
 ```ino
 37 const char *DEFAULT_SSID = "BW16"; // 默认 WiFi 名称
 38 const char *DEFAULT_PASS = "1234567890";             // 默认 WiFi 密码 (8~63位，留空为开放网络)
-39 const uint8_t DEFAULT_IP[4] = {192, 168, 1, 1};    // 默认后台管理 IP
+39 const uint8_t DEFAULT_IP[4] = {192, 168, 1, 1};      // 默认后台管理 IP
+40 const uint8_t DEFAULT_MASK[4] = {255, 255, 255, 0};  // 默认子网掩码
+41 const bool DEFAULT_DHCP = true;                      // 默认开启 DHCP 服务
 ```
+
+![展示2](imgs/test2.png)
 
 ### 上传程序
 
@@ -80,10 +84,6 @@ BSSID码掉了。
 
 > [!tip]
 > 开始攻击后，RTL8720DN的wifi也会无法连接。
-
-在Web界面也可以修改WiFi和IP信息。
-
-![展示2](imgs/test2.png)
 
 ## 疑问
 
